@@ -1,5 +1,5 @@
 // src/screens/Senior/HealthScreen.tsx
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,9 @@ import {
   RefreshControl,
   Platform,
   Modal,
-  FlatList
+  FlatList,
+  Button,
+  Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -26,6 +28,7 @@ import * as Haptics from 'expo-haptics';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useBLEWatch } from '../../hooks/useBLEWatch'; // <-- new BLE hook
+import { formatDistanceToNow } from 'date-fns';
 
 // Extend dayjs with relativeTime plugin
 dayjs.extend(relativeTime);
@@ -73,23 +76,31 @@ const HealthScreen: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'activity' | 'sleep' | 'settings'>('overview');
   const [showDeviceList, setShowDeviceList] = useState(false);
 
-  // Use the new BLE hook
+  // Use the BLE hook and get only the properties we need
   const {
-    watchData,
-    webViewRef,
-    handleMessage,
-    handleError,
-    handleWebViewLoad,
-    startScan,
-    connectToDevice,
+    watchData = { status: 'disconnected' },
     devices = [],
-    isScanning,
-    deviceTypes = [],
-    selectedDeviceType,
-    setSelectedDeviceType,
-    syncDeviceData,
-    disconnectDevice
-  } = useBLEWatch() as any;
+    isScanning = false,
+    selectedDeviceType = 'generic',
+    setSelectedDeviceType = () => {},
+    syncDeviceData = async () => {},
+    disconnectDevice = () => {},
+    isSyncing = false,
+    lastSync = null,
+    syncError = null,
+    startScan = () => {},
+    stopScan = () => {},
+    connectToDevice = () => {},
+    webViewRef = { current: null },
+    handleMessage = () => {},
+    handleError = () => {},
+    handleWebViewLoad = () => {}
+  } = useBLEWatch();
+
+  // DEBUG: log watchData each time it updates
+  useEffect(() => {
+    console.log('Watch data updated:', watchData);
+  }, [watchData]);
 
   // Translations (fallback to static strings if translation keys missing)
   const { translatedText: healthOverviewText = 'Health Overview' } = useCachedTranslation('Health Overview', currentLanguage);
@@ -154,16 +165,16 @@ const HealthScreen: React.FC = () => {
 
     if (watchData.rssi >= -60) {
       level = 4;
-      icon = 'signal-cellular-3';
+      icon = 'cellular';
     } else if (watchData.rssi >= -70) {
       level = 3;
-      icon = 'signal-cellular-2';
+      icon = 'cellular';
     } else if (watchData.rssi >= -80) {
       level = 2;
-      icon = 'signal-cellular-1';
+      icon = 'cellular';
     } else {
       level = 1;
-      icon = 'signal-cellular-outline';
+      icon = 'cellular';
     }
 
     return {
@@ -291,6 +302,37 @@ const HealthScreen: React.FC = () => {
     return content;
   });
 
+  // Sync status renderer (new)
+  const renderSyncStatus = () => {
+    if (isSyncing) {
+      return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+          <ActivityIndicator size="small" color={isDark ? '#4FD1C5' : '#007AFF'} style={{ marginRight: 8 }} />
+          <Text style={{ color: isDark ? '#A0AEC0' : '#666', fontSize: 12 }}>Syncing data...</Text>
+        </View>
+      );
+    }
+
+    if (syncError) {
+      return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+          <Ionicons name="warning" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
+          <Text style={{ color: '#FF3B30', fontSize: 12 }}>Sync failed</Text>
+        </View>
+      );
+    }
+
+    if (lastSync) {
+      return (
+        <Text style={{ color: isDark ? '#A0AEC0' : '#666', fontSize: 12, marginTop: 8 }}>
+          Last synced {formatDistanceToNow(lastSync, { addSuffix: true })}
+        </Text>
+      );
+    }
+
+    return null;
+  };
+
   // If connecting show loading
   if (watchData?.status === 'connecting') {
     return (
@@ -385,7 +427,84 @@ const HealthScreen: React.FC = () => {
                 <Text style={[styles.detailValue, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{formatLastUpdated()}</Text>
               </View>
             )}
+
+            {/* Sync status appears under device details */}
+            {renderSyncStatus()}
+
+            {/* Manual Sync Now button */}
+            <View style={{ marginTop: 12 }}>
+              <Button
+                title="Sync Now"
+                onPress={async () => {
+                  try {
+                    if (typeof syncToSupabase !== 'function') {
+                      Alert.alert('Error', 'Sync function not available');
+                      return;
+                    }
+                    const { success, error } = await syncToSupabase();
+                    if (success) {
+                      Alert.alert('Success', 'Data synced successfully!');
+                    } else {
+                      Alert.alert('Error', error || 'Failed to sync data');
+                    }
+                  } catch (err: any) {
+                    Alert.alert('Error', err?.message || 'An unexpected error occurred');
+                  }
+                }}
+                disabled={!!isSyncing}
+                color={isDark ? '#4FD1C5' : undefined}
+              />
+            </View>
+
+            {/* Optional debug: dump available services & characteristics.
+                This calls `listServices()` if your hook exposes it. The hook-side
+                debug snippet you can add is shown below (recommended to paste
+                inside your useBLEWatch.connectToDevice after connection):
+                
+                // In connectToDevice function, after connecting:
+                const services = await connected.services();
+                console.log('Available services:', services);
+                for (const service of services) {
+                  const characteristics = await service.characteristics();
+                  console.log(`Service ${service.uuid} characteristics:`, characteristics);
+                }
+             */}
+            <View style={{ marginTop: 12 }}>
+              <Button
+                title="Debug Info"
+                onPress={() => {
+                  console.log('Current watch data:', watchData);
+                  Alert.alert(
+                    'Debug Info',
+                    `Status: ${watchData?.status || 'unknown'}
+                    Device: ${watchData?.deviceName || 'N/A'}
+                    Last Updated: ${watchData?.lastUpdated?.toISOString() || 'N/A'}`,
+                    [{ text: 'OK' }]
+                  );
+                }}
+                color={isDark ? '#4FD1C5' : undefined}
+              />
+            </View>
+
           </View>
+        )}
+      </View>
+
+      {/* --- DEBUG: explicit Health metric block (shows heart rate + status + lastUpdated) --- */}
+      <View style={[styles.healthMetric, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9' }]}>
+        <Text style={[styles.metricLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+          Heart Rate (DEBUG)
+        </Text>
+        <Text style={[styles.metricValue, { color: isDark ? '#F8FAFC' : '#0F172A' }]}>
+          {watchData?.heartRate ? `${watchData.heartRate} BPM` : '--'}
+        </Text>
+        <Text style={[styles.lastUpdated, { color: isDark ? '#64748B' : '#94A3B8' }]}>
+          Status: {watchData?.status || 'disconnected'}
+        </Text>
+        {watchData?.lastUpdated && (
+          <Text style={[styles.lastUpdated, { color: isDark ? '#64748B' : '#94A3B8' }]}>
+            Updated: {new Date(watchData.lastUpdated).toLocaleTimeString()}
+          </Text>
         )}
       </View>
 
@@ -622,11 +741,29 @@ const HealthScreen: React.FC = () => {
     >
       <View style={styles.modalContainer}>
         <View style={[styles.modalContent, { backgroundColor: isDark ? '#0f1724' : '#FFFFFF' }]}>
+
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
               Available Devices
             </Text>
-            <TouchableOpacity onPress={() => setShowDeviceList(false)}>
+
+            {/* Scan / Stop button inserted into modal header */}
+            <View style={{ marginLeft: 8 }}>
+              <Button
+                title={isScanning ? 'Scanning...' : 'Scan for Devices'}
+                onPress={() => {
+                  if (isScanning) {
+                    stopScan && stopScan();
+                  } else {
+                    startScan && startScan();
+                  }
+                }}
+                disabled={isScanning}
+                color={isDark ? '#4FD1C5' : '#007AFF'}
+              />
+            </View>
+
+            <TouchableOpacity onPress={() => setShowDeviceList(false)} style={{ marginLeft: 12 }}>
               <Ionicons name="close" size={24} color={isDark ? '#E2E8F0' : '#1A202C'} />
             </TouchableOpacity>
           </View>
@@ -716,24 +853,6 @@ const HealthScreen: React.FC = () => {
       <View style={styles.webviewContainer}>
         {/* Keep WebView if your useBLEWatch expects message events from a hidden webview.
             If not needed you can safely remove this block. */}
-        {/* <WebView
-          ref={webViewRef as any}
-          source={{ html: BLE_HTML }}
-          onMessage={handleMessage}
-          onError={handleError}
-          onLoad={handleWebViewLoad}
-          onContentProcessDidTerminate={retryConnection}
-          style={styles.hiddenWebView}
-          originWhitelist={['*']}
-          javaScriptEnabled
-          domStorageEnabled
-          startInLoadingState
-          renderLoading={() => (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={isDark ? '#4FD1C5' : '#2C7A7B'} />
-            </View>
-          )}
-        /> */}
       </View>
 
       {renderDeviceListModal()}
@@ -803,6 +922,25 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 20, fontWeight: 'bold', marginRight: 4 },
   metricUnit: { fontSize: 12, opacity: 0.7 },
 
+  // debug health metric (new)
+  healthMetric: {
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  metricLabel: {
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  metricValue: {
+    fontSize: 32,
+    fontWeight: 'bold',
+  },
+  lastUpdated: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+
   // chart
   chartContainer: { borderRadius: 12, padding: 16, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
   chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
@@ -840,7 +978,7 @@ const styles = StyleSheet.create({
   // modal (new)
   modalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', marginBottom: 20 },
   modalTitle: { fontSize: 20, fontWeight: '600' },
   scanningIndicator: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   scanningText: { marginLeft: 8, fontSize: 14 },
