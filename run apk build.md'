@@ -1,0 +1,10 @@
+cd android
+export GRADLE_OPTS="-Xmx4g"
+./gradlew assembleRelease --no-daemon
+
+
+npx expo run:android --device
+
+$env:JAVA_HOME = "C:\Java\jdk-17"
+$env:Path = "$env:JAVA_HOME\bin;" + $env:Path
+npx expo run:android --device

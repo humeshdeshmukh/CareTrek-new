@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "CareTrekApp",
+    "slug": "CareTrekApp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          },
+          "android": {
+            "enableShrinkResourcesInReleaseBuild": false,
+            "enableProguardInReleaseBuild": false
+          }
+        }
+      ],
+      "expo-secure-store",
+      "expo-font"
+    ],
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.humeshdeshmukh.caretrek",
+      "buildNumber": "1.0.0"
+    },
+    "android": {
+      "package": "com.humeshdeshmukh.caretrek",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "extends": "./tsconfig.base",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/types"
+    ],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "jsx": "react-native",
+    "moduleResolution": "node",
+    "module": "commonjs",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "lib": ["es2017", "dom"],
+    "target": "esnext"
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "./src/types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/__tests__/*",
+    "**/babel.config.js",
+    "**/metro.config.js"
+  ]
+}
