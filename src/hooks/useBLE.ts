@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { BleManager, Device, State as BleState } from 'react-native-ble-plx';
-import { Platform } from 'react-native';
+import { BleManager, Device } from 'react-native-ble-plx';
+import { Platform, PermissionsAndroid, Linking, Alert } from 'react-native';
 
 type DeviceType = 'miband' | 'amazfit' | 'firebolt' | 'generic';
 
@@ -46,6 +46,77 @@ const useBLE = () => {
     };
   }, []);
 
+  // Check if location services are enabled (simplified version)
+  const checkLocationServices = useCallback(async () => {
+    if (Platform.OS === 'android') {
+      return await requestLocationPermission();
+    }
+    return true; // For iOS, we'll rely on the system to handle permissions
+  }, []);
+
+  // Open device settings
+  const openSettings = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      Linking.openURL('app-settings:');
+    } else {
+      Linking.openSettings();
+    }
+  }, []);
+
+  // Show location services alert
+  const showLocationServicesAlert = useCallback(() => {
+    Alert.alert(
+      'Location Services Required',
+      'Bluetooth Low Energy scanning requires location services to be enabled. Please enable location services in your device settings.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Open Settings', 
+          onPress: () => {
+            if (Platform.OS === 'ios') {
+              Linking.openURL('app-settings:');
+            } else {
+              Linking.openSettings();
+            }
+          }
+        }
+      ]
+    );
+  }, []);
+
+  // Request location permission (required for BLE on Android)
+  const requestLocationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: 'Location Permission',
+          message: 'This app needs location permission to scan for BLE devices',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        },
+      );
+      
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (err) {
+      console.warn('Error requesting location permission:', err);
+      return false;
+    }
+  };
+
+  // Stop BLE scanning
+  const stopScan = useCallback(() => {
+    try {
+      bleManager.stopDeviceScan();
+      setState(prev => ({ ...prev, isScanning: false }));
+    } catch (error) {
+      console.error('Error stopping scan:', error);
+    }
+  }, []);
+
   // Scan for BLE devices
   const startScan = useCallback(async () => {
     try {
@@ -55,8 +126,16 @@ const useBLE = () => {
       if (Platform.OS === 'android') {
         const granted = await requestLocationPermission();
         if (!granted) {
+          showLocationServicesAlert();
           throw new Error('Location permission is required for BLE scanning');
         }
+      }
+
+      // Check location permissions
+      const hasPermission = await checkLocationServices();
+      if (!hasPermission) {
+        showLocationServicesAlert();
+        throw new Error('Location permission is required for BLE scanning');
       }
 
       // Start scanning
@@ -65,11 +144,20 @@ const useBLE = () => {
         { allowDuplicates: false },
         (error, device) => {
           if (error) {
+            console.error('BLE Scan Error:', error);
+            const errorMessage = error.message.includes('Location services are disabled')
+              ? 'Location services are disabled. Please enable location services to scan for BLE devices.'
+              : error.message;
+            
             setState(prev => ({
               ...prev,
-              error: error.message,
+              error: errorMessage,
               isScanning: false
             }));
+
+            if (error.message.includes('Location services are disabled')) {
+              showLocationServicesAlert();
+            }
             return;
           }
 
@@ -237,35 +325,21 @@ const useBLE = () => {
     }
   };
 
-  // Request location permission (required for BLE on Android)
-  const requestLocationPermission = async (): Promise<boolean> => {
-    if (Platform.OS !== 'android') return true;
-    
-    try {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        {
-          title: 'Location Permission',
-          message: 'This app needs location permission to scan for BLE devices',
-          buttonNeutral: 'Ask Me Later',
-          buttonNegative: 'Cancel',
-          buttonPositive: 'OK',
-        },
-      );
-      
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
-    } catch (err) {
-      console.warn(err);
-      return false;
-    }
-  };
-
   return {
     ...state,
     startScan,
+    stopScan,
     connectToDevice,
     disconnectDevice,
-    syncToSupabase,
+    clearError: () => setState(prev => ({ ...prev, error: null })),
+    clearDevices: () => setState(prev => ({ ...prev, devices: [] })),
+    openSettings: () => {
+      if (Platform.OS === 'ios') {
+        Linking.openURL('app-settings:');
+      } else {
+        Linking.openSettings();
+      }
+    },
   };
 };
 

@@ -1,5 +1,7 @@
 // src/screens/Senior/HealthScreen.tsx
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import useBLE from '../../hooks/useBLE';
+import { supabase } from '../../lib/supabase';
 import {
   View,
   Text,
@@ -75,6 +77,15 @@ const HealthScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'activity' | 'sleep' | 'settings'>('overview');
   const [showDeviceList, setShowDeviceList] = useState(false);
+  const { syncToSupabase } = useBLE();
+  
+  // Define available device types with display names and icons
+  const deviceTypes = [
+    { type: 'miband', name: 'Mi Band', icon: 'watch' },
+    { type: 'amazfit', name: 'Amazfit', icon: 'watch' },
+    { type: 'firebolt', name: 'Firebolt', icon: 'watch' },
+    { type: 'generic', name: 'Generic', icon: 'watch' },
+  ];
 
   // Use the BLE hook and get only the properties we need
   const {
@@ -441,7 +452,7 @@ const HealthScreen: React.FC = () => {
                       Alert.alert('Error', 'Sync function not available');
                       return;
                     }
-                    const { success, error } = await syncToSupabase();
+                    const { success, error } = await syncToSupabase(supabase);
                     if (success) {
                       Alert.alert('Success', 'Data synced successfully!');
                     } else {
@@ -919,7 +930,7 @@ const styles = StyleSheet.create({
   metricIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   metricTextContainer: { flex: 1 },
   metricTitle: { fontSize: 12, marginBottom: 2, opacity: 0.8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  metricValue: { fontSize: 20, fontWeight: 'bold', marginRight: 4 },
+  metricValue: { fontSize: 32, fontWeight: 'bold', marginRight: 4 },
   metricUnit: { fontSize: 12, opacity: 0.7 },
 
   // debug health metric (new)
@@ -931,10 +942,6 @@ const styles = StyleSheet.create({
   metricLabel: {
     fontSize: 16,
     marginBottom: 8,
-  },
-  metricValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
   },
   lastUpdated: {
     fontSize: 12,
@@ -991,7 +998,7 @@ const styles = StyleSheet.create({
   scanButtonText: { marginLeft: 8, fontWeight: '500' },
 
   // new modal styles
-  deviceInfo: { flex: 1, marginLeft: 12 },
+  modalDeviceInfo: { flex: 1, marginLeft: 12 },
   deviceId: { fontSize: 12, marginTop: 2 },
   noDevicesContainer: { padding: 32, alignItems: 'center', justifyContent: 'center' },
 });

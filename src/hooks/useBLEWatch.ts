@@ -1,9 +1,10 @@
 // src/hooks/useBLEWatch.ts
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
+import { BleManager, Device, Characteristic, State } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
 import { saveHealthMetrics } from '../services/healthDataService';
 import { supabase } from '../lib/supabase';
+import { Buffer } from 'buffer';
 
 type DeviceType = 'miband' | 'amazfit' | 'firebolt' | 'generic';
 
@@ -40,11 +41,228 @@ export const useBLEWatch = () => {
   const isMounted = useRef<boolean>(true);
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartRateMonitorRef = useRef<{ cancel?: () => void } | null>(null);
+  const stopScanRef = useRef<() => void>(() => {});
 
   // sync state additions
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+
+  const stopScan = useCallback(() => {
+    try {
+      if (bleManagerRef.current) {
+        bleManagerRef.current.stopDeviceScan();
+      }
+    } catch (e) {
+      console.warn('Error stopping scan:', e);
+    }
+    
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
+    
+    if (isMounted.current) {
+      setIsScanning(false);
+      setWatchData(prev => ({
+        ...prev,
+        status: prev.status === 'connected' ? 'connected' : 'disconnected'
+      }));
+    }
+  }, []);
+
+  // Store the latest stopScan in a ref to avoid circular dependencies
+  useEffect(() => {
+    stopScanRef.current = stopScan;
+  }, [stopScan]);
+
+  const checkLocationServices = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS === 'android') {
+      try {
+        // For Android 10 (API 29) and above, we need to check for location permission
+        // and assume location services are required for BLE scanning
+        const apiLevel = parseInt(Platform.Version.toString(), 10);
+        if (apiLevel >= 29) {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+            {
+              title: 'Location Permission',
+              message: 'Bluetooth Low Energy requires Location permission to scan for nearby devices',
+              buttonNeutral: 'Ask Me Later',
+              buttonNegative: 'Cancel',
+              buttonPositive: 'OK',
+            },
+          );
+          
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert(
+              'Location Permission Required',
+              'Bluetooth Low Energy requires Location permission to scan for nearby devices. Please grant the location permission in app settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                  text: 'Open Settings', 
+                  onPress: () => {
+                    Linking.openSettings();
+                  } 
+                }
+              ]
+            );
+            return false;
+          }
+          
+          // For Android 10+, we can proceed with just the location permission
+          return true;
+        }
+        
+        // Request location permission
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          {
+            title: 'Location Permission',
+            message: 'Bluetooth Low Energy requires Location permission to scan for nearby devices',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          },
+        );
+        
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (error) {
+        console.error('Error checking location services:', error);
+        return false;
+      }
+    }
+    return true; // For iOS, location services are not required for BLE scanning
+  }, []);
+
+  const showLocationServicesAlert = useCallback(() => {
+    Alert.alert(
+      'Location Services Required',
+      'Bluetooth Low Energy requires Location Services to be enabled. Please enable Location Services in your device settings to continue.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Open Settings', 
+          onPress: () => {
+            if (Platform.OS === 'android') {
+              Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+            }
+          } 
+        }
+      ]
+    );
+  }, []);
+
+  const startScan = useCallback(async () => {
+    if (!bleManagerRef.current) return;
+
+    try {
+      // Check and request necessary permissions
+      if (Platform.OS === 'android') {
+        try {
+          const hasLocationPermission = await checkLocationServices();
+          if (!hasLocationPermission) {
+            console.log('Location services or permission not granted');
+            showLocationServicesAlert();
+            setWatchData(prev => ({ ...prev, status: 'error' }));
+            return;
+          }
+        } catch (error) {
+          console.error('Error checking location services:', error);
+          showLocationServicesAlert();
+          setWatchData(prev => ({ ...prev, status: 'error' }));
+          return;
+        }
+      }
+
+      setDevices([]);
+      if (isMounted.current) {
+        setIsScanning(true);
+        setWatchData(prev => ({ ...prev, status: 'scanning' }));
+      }
+
+      // Start scanning for devices
+      bleManagerRef.current.startDeviceScan(
+        null,
+        { allowDuplicates: false },
+        (error, device) => {
+          if (error) {
+            console.error('Scan error:', error);
+            stopScanRef.current();
+            
+            // Handle specific BLE errors
+            if (error.message.includes('Location services are disabled')) {
+              showLocationServicesAlert();
+            }
+            
+            return;
+          }
+
+          if (device?.name && isMounted.current) {
+            setDevices(prevDevices => {
+              // Check if device already exists in the list
+              const deviceExists = prevDevices.some(d => d.id === device.id);
+              return deviceExists ? prevDevices : [...prevDevices, device];
+            });
+          }
+        },
+      );
+
+      // Stop scanning after 10 seconds
+      scanTimeoutRef.current = setTimeout(() => {
+        stopScanRef.current();
+      }, 10000);
+
+    } catch (error) {
+      console.error('Error starting scan:', error);
+      if (isMounted.current) {
+        setIsScanning(false);
+        setWatchData(prev => ({ ...prev, status: 'error' }));
+      }
+    }
+  }, []);
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      stopScan();
+      if (bleManagerRef.current) {
+        bleManagerRef.current.destroy();
+      }
+    };
+  }, [stopScan]);
+
+  // Add check for BLE state
+  useEffect(() => {
+    if (!bleManagerRef.current) return;
+
+    const subscription = bleManagerRef.current.onStateChange((state) => {
+      if (state === 'PoweredOff') {
+        Alert.alert(
+          'Bluetooth is Off',
+          'Please enable Bluetooth to connect to your device',
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'Open Settings',
+              onPress: () => {
+                if (Platform.OS === 'android') {
+                  Linking.openSettings();
+                } else if (Platform.OS === 'ios') {
+                  Linking.openURL('App-Prefs:Bluetooth');
+                }
+              },
+            },
+          ]
+        );
+      }
+    }, true);
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   if (!bleManagerRef.current) {
     bleManagerRef.current = new BleManager();
@@ -97,32 +315,18 @@ export const useBLEWatch = () => {
     return true;
   }, []);
 
-  // Stop scanning helper (exposed)
-  const stopScan = useCallback(() => {
-    try {
-      bleManager.stopDeviceScan();
-    } catch (e) {
-      // ignore
-    }
-    if (scanTimeoutRef.current) {
-      clearTimeout(scanTimeoutRef.current);
-      scanTimeoutRef.current = null;
-    }
-    if (isMounted.current) {
-      setIsScanning(false);
-      setWatchData(prev => (prev.status === 'connected' ? prev : { ...prev, status: 'disconnected' }));
-    }
-  }, [bleManager]);
+  // stopScan is already defined above with better implementation
 
   // Start BLE scanning (no demo data) with Bluetooth state check + error handling
-  const startScan = useCallback(async () => {
-    try {
-      if (!isMounted.current) return;
+  const scanForDevices = useCallback(async () => {
+    if (isScanning) return;
 
-      setWatchData(prev => ({ ...prev, status: 'scanning' }));
+    try {
       setDevices([]);
+      setWatchData(prev => ({ ...prev, status: 'scanning' }));
       setIsScanning(true);
 
+      // Check and request location permission
       const hasPermission = await requestPermissions();
       if (!hasPermission) {
         setWatchData(prev => ({ ...prev, status: 'error' }));
@@ -130,17 +334,16 @@ export const useBLEWatch = () => {
         return;
       }
 
-      // Add Bluetooth state check
+      // Check Bluetooth state
       try {
         const state = await bleManager.state();
-        if (state !== 'PoweredOn' && state !== 'poweredOn') {
-          // some versions return lowercase, be lenient
-          throw new Error('BluetoothLE is powered off');
+        const isPoweredOn = state === State.PoweredOn || String(state).toLowerCase() === 'poweredon';
+        if (!isPoweredOn) {
+          throw new Error('Bluetooth is not powered on');
         }
-      } catch (errState) {
-        // If bleManager.state() isn't available or errors, we'll handle below via startDeviceScan callback as well.
-        // But if it threw because bluetooth is off, show alert and stop.
-        if ((errState as any)?.message?.includes('BluetoothLE is powered off') || (errState as any)?.message?.toLowerCase?.().includes('powered off')) {
+      } catch (error) {
+        console.error('Bluetooth state error:', error);
+        if (error instanceof Error && error.message.includes('powered off')) {
           Alert.alert(
             'Bluetooth is Off',
             'Please enable Bluetooth to connect to health devices',
@@ -148,65 +351,57 @@ export const useBLEWatch = () => {
               {
                 text: 'Open Settings',
                 onPress: () => {
-                  if (Platform.OS === 'android') {
-                    Linking.openSettings();
-                  } else {
+                  if (Platform.OS === 'ios') {
                     Linking.openURL('app-settings:');
+                  } else {
+                    Linking.openSettings();
                   }
-                }
+                },
               },
-              { text: 'OK' }
-            ]
+              { text: 'Cancel', style: 'cancel' },
+            ],
           );
-          setWatchData(prev => ({ ...prev, status: 'error' }));
-          setIsScanning(false);
-          return;
         }
+        setWatchData(prev => ({ ...prev, status: 'error' }));
+        setIsScanning(false);
+        return;
       }
 
-      // ensure previous scan stopped
-      try {
-        bleManager.stopDeviceScan();
-      } catch (_) {}
-
-      bleManager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-        if (!isMounted.current) return;
-
+      // Start BLE scanning
+      bleManager.startDeviceScan(null, null, (error, device) => {
         if (error) {
           console.error('BLE Scan Error:', error);
-
-          // Handle Bluetooth off error
-          const msg = (error?.message || '').toString();
-          if (msg.includes('BluetoothLE is powered off') || msg.includes('Bluetooth is not powered on') || msg.toLowerCase().includes('powered off')) {
+          
+          // Handle location services disabled case
+          if (error.message.includes('Location services are disabled')) {
             Alert.alert(
-              'Bluetooth is Off',
-              'Please enable Bluetooth to connect to health devices',
+              'Location Services Required',
+              'Bluetooth Low Energy scanning requires location services to be enabled.',
               [
-                {
+                { 
                   text: 'Open Settings',
                   onPress: () => {
-                    if (Platform.OS === 'android') {
-                      Linking.openSettings();
-                    } else {
+                    if (Platform.OS === 'ios') {
                       Linking.openURL('app-settings:');
+                    } else {
+                      Linking.openSettings();
                     }
                   }
                 },
-                { text: 'OK' }
+                { text: 'Cancel', style: 'cancel' },
               ]
             );
           }
-
+          
           setWatchData(prev => ({ ...prev, status: 'error' }));
           setIsScanning(false);
           return;
         }
 
-        // add only devices that broadcast a name to keep list manageable
         if (device?.name) {
-          setDevices(prev => {
-            const exists = prev.some(d => d.id === device.id);
-            return exists ? prev : [...prev, device];
+          setDevices(prevDevices => {
+            const exists = prevDevices.some(d => d.id === device.id);
+            return exists ? prevDevices : [...prevDevices, device];
           });
         }
       });
@@ -279,8 +474,9 @@ export const useBLEWatch = () => {
       // Check Bluetooth state before connecting
       try {
         const state = await bleManager.state();
-        if (state !== 'PoweredOn' && state !== 'poweredOn') {
-          throw new Error('BluetoothLE is powered off');
+        const isPoweredOn = state === State.PoweredOn || String(state).toLowerCase() === 'poweredon';
+        if (!isPoweredOn) {
+          throw new Error('Bluetooth is not powered on');
         }
       } catch (stateErr) {
         // If bleManager.state() errors or reports off, present user action
