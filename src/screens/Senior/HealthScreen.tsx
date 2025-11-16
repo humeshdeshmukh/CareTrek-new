@@ -1,5 +1,6 @@
 // src/screens/Senior/HealthScreen.tsx
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { supabase } from '../../lib/supabase';
 import {
   View,
@@ -69,8 +70,9 @@ const generateSampleChartData = () => {
   return { labels, data };
 };
 
-const HealthScreen: React.FC = () => {
-  const navigation = useNavigation<HealthScreenNavigationProp>();
+type HealthScreenProps = NativeStackScreenProps<RootStackParamList, 'Health'>;
+
+const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
   const { isDark } = useTheme();
   const { currentLanguage } = useTranslation();
   const [refreshing, setRefreshing] = useState(false);

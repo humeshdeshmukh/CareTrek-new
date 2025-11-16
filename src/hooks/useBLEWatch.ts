@@ -1,6 +1,6 @@
 // src/hooks/useBLEWatch.ts
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { BleManager, Device, Characteristic, State } from 'react-native-ble-plx';
+import { BleManager, Device, Characteristic, State as BleState } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
 import { saveHealthMetrics } from '../services/healthDataService';
 import { supabase } from '../lib/supabase';
@@ -22,13 +22,6 @@ interface WatchData {
   firmwareVersion?: string;
   hardwareVersion?: string;
   rssi?: number | null;
-  sleepData?: {
-    deepSleep: number;
-    lightSleep: number;
-    remSleep: number;
-    awake: number;
-  } | null;
-  // keep extensible
   [k: string]: any;
 }
 
@@ -39,65 +32,97 @@ export const useBLEWatch = () => {
   const [selectedDeviceType, setSelectedDeviceType] = useState<DeviceType>('generic');
 
   const bleManagerRef = useRef<BleManager | null>(null);
-  const isMounted = useRef<boolean>(true);
+  const isMounted = useRef(true);
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // store multiple monitors/subscriptions to clean up
   const monitorsRef = useRef<Array<{ cancel: () => void }>>([]);
   const connectedDeviceRef = useRef<Device | null>(null);
+
+  // use refs for frequently-read values to avoid stale closures
+  const batteryRef = useRef<number | undefined>(undefined);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  // Ensure BleManager exists
-  if (!bleManagerRef.current) bleManagerRef.current = new BleManager();
-  const bleManager = bleManagerRef.current;
-
-  // ---------- Helpers ----------
+  // ---------- helpers ----------
   const safeSetWatchData = (updater: Partial<WatchData> | ((prev: WatchData) => WatchData)) => {
     if (!isMounted.current) return;
-    setWatchData(prev => (typeof updater === 'function' ? (updater as any)(prev) : { ...prev, ...updater }));
+    setWatchData(prev => {
+      const next = typeof updater === 'function' ? (updater as any)(prev) : { ...prev, ...updater };
+      if ((next as any).battery !== undefined) batteryRef.current = (next as any).battery;
+      return next;
+    });
   };
 
   const clearAllMonitors = () => {
     const mons = monitorsRef.current;
     monitorsRef.current = [];
     for (const m of mons) {
-      try {
-        m.cancel();
-      } catch (_) {}
+      try { m.cancel(); } catch (_) {}
     }
   };
 
+  const isMostlyPrintableAscii = (buf: Buffer) => {
+    if (!buf || buf.length === 0) return false;
+    let printable = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const b = buf[i];
+      if ((b >= 32 && b <= 126) || b === 9 || b === 10 || b === 13) printable++;
+    }
+    return printable / buf.length > 0.6;
+  };
+
+  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(val)));
+
+  // Robust error wrapper: always produce an Error object (never null)
+  const handleMonitorError = (error: any, monitorName = 'BLE') => {
+    const safeErr = error && typeof error === 'object' ? error : { message: String(error ?? 'Unknown BLE error') };
+    const message = safeErr.message || `Unknown error in ${monitorName}`;
+    const code = (safeErr as any).code || 'UNKNOWN_ERROR';
+    const reason = (safeErr as any).reason || message;
+    // do not re-throw; log and mark state
+    console.error(`${monitorName} monitor error:`, { message, code, reason, original: safeErr });
+    safeSetWatchData({ status: 'error' });
+    return new Error(`${monitorName}: ${message}`);
+  };
+
+  // retry helper for flaky native calls
+  const withRetry = async <T,>(operation: () => Promise<T>, maxRetries = 3, baseDelay = 400): Promise<T> => {
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        lastErr = e;
+        if (attempt < maxRetries) {
+          await new Promise(res => setTimeout(res, baseDelay * Math.pow(2, attempt - 1)));
+        }
+      }
+    }
+    throw lastErr || new Error('Unknown error in withRetry');
+  };
+
+  // ---------- permissions ----------
   const checkLocationServices = useCallback(async (): Promise<boolean> => {
     if (Platform.OS === 'android') {
       try {
-        const apiLevel = parseInt(Platform.Version.toString(), 10);
-        // request location for BLE scanning if needed
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          {
-            title: 'Location Permission',
-            message: 'Bluetooth Low Energy requires Location permission to scan for nearby devices',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          },
-        );
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
+          title: 'Location Permission',
+          message: 'This app needs location permission to scan for BLE devices',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK'
+        });
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert(
-            'Location Permission Required',
-            'Please grant Location permission to allow BLE scanning.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => Linking.openSettings() },
-            ],
-          );
+          Alert.alert('Location Permission', 'Please grant location permission to scan for BLE devices', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]);
           return false;
         }
         return true;
-      } catch (error) {
-        console.error('Error checking location services:', error);
+      } catch (e) {
+        console.error('checkLocationServices error', e);
         return false;
       }
     }
@@ -105,20 +130,14 @@ export const useBLEWatch = () => {
   }, []);
 
   const showLocationServicesAlert = useCallback(() => {
-    Alert.alert(
-      'Location Services Required',
-      'Please enable Location Services to scan for BLE devices.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Open Settings', onPress: () => (Platform.OS === 'android' ? Linking.openSettings() : null) },
-      ],
-    );
+    Alert.alert('Location Services Required', 'Please enable Location Services to scan for BLE devices.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Open Settings', onPress: () => (Platform.OS === 'android' ? Linking.openSettings() : null) }
+    ]);
   }, []);
 
   const stopScan = useCallback(() => {
-    try {
-      bleManager.stopDeviceScan();
-    } catch (_) {}
+    try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
     if (scanTimeoutRef.current) {
       clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = null;
@@ -127,49 +146,37 @@ export const useBLEWatch = () => {
       setIsScanning(false);
       safeSetWatchData(prev => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
     }
-  }, [bleManager]);
-
-  // request permission helper
-  const requestPermissions = useCallback(async () => {
-    if (Platform.OS === 'android') {
-      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
-        title: 'Location Permission',
-        message: 'This app needs location permission to scan for BLE devices',
-        buttonNeutral: 'Ask Me Later',
-        buttonNegative: 'Cancel',
-        buttonPositive: 'OK'
-      });
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
-    }
-    return true;
   }, []);
 
-  // parse heart rate (BLE spec)
+  // ---------- parsers (defensive) ----------
   const parseHeartRate = (valueBase64: string): number | undefined => {
     try {
       const buffer = Buffer.from(valueBase64, 'base64');
+      if (!buffer || buffer.length < 2) return undefined;
+      if (isMostlyPrintableAscii(buffer)) return undefined;
       const flags = buffer.readUInt8(0);
-      const hrFormatUint16 = (flags & 0x01) !== 0;
-      if (hrFormatUint16) {
-        return buffer.readUInt16LE(1);
-      } else {
-        return buffer.readUInt8(1);
-      }
-    } catch (e) {
+      const hr16 = (flags & 0x01) !== 0;
+      const hr = hr16 ? buffer.readUInt16LE(1) : buffer.readUInt8(1);
+      if (!Number.isFinite(hr) || hr < 30 || hr > 220) return undefined;
+      return clamp(hr, 30, 220);
+    } catch {
       return undefined;
     }
   };
 
-  // parse SpO2 (Pulse Oximeter Measurement - simplified)
   const parseSpO2 = (valueBase64: string): number | undefined => {
     try {
       const buf = Buffer.from(valueBase64, 'base64');
-      // Many vendors send SpO2 as a single byte percentage — fallback to heuristics
-      if (buf.length === 1) return buf.readUInt8(0);
-      // else try to find a plausible byte in the range 70-100
+      if (!buf || buf.length === 0) return undefined;
+      if (isMostlyPrintableAscii(buf)) return undefined;
+      if (buf.length === 1) {
+        const v = buf.readUInt8(0);
+        if (v >= 50 && v <= 100) return clamp(v, 50, 100);
+        return undefined;
+      }
       for (let i = 0; i < buf.length; i++) {
         const v = buf.readUInt8(i);
-        if (v >= 60 && v <= 100) return v;
+        if (v >= 50 && v <= 100) return clamp(v, 50, 100);
       }
       return undefined;
     } catch {
@@ -177,17 +184,21 @@ export const useBLEWatch = () => {
     }
   };
 
-  // parse blood pressure (simple heuristic)
   const parseBloodPressure = (valueBase64: string): { systolic: number; diastolic: number } | undefined => {
     try {
       const buf = Buffer.from(valueBase64, 'base64');
-      // BP Measurement (2A35) is complex; try simple parse: first two uint16's
-      if (buf.length >= 4) {
-        const systolic = buf.readUInt16LE(0);
-        const diastolic = buf.readUInt16LE(2);
-        if (systolic > 30 && diastolic > 20 && systolic > diastolic) {
-          return { systolic, diastolic };
-        }
+      if (!buf || buf.length < 4) return undefined;
+      if (isMostlyPrintableAscii(buf)) return undefined;
+      const systolic = buf.readUInt16LE(0);
+      const diastolic = buf.readUInt16LE(2);
+      if (
+        Number.isFinite(systolic) &&
+        Number.isFinite(diastolic) &&
+        systolic >= 70 && systolic <= 260 &&
+        diastolic >= 40 && diastolic <= 200 &&
+        systolic > diastolic
+      ) {
+        return { systolic: clamp(systolic, 70, 260), diastolic: clamp(diastolic, 40, 200) };
       }
       return undefined;
     } catch {
@@ -195,45 +206,84 @@ export const useBLEWatch = () => {
     }
   };
 
-  // generic heuristic parser for vendor notifications
-  const parseGenericNotification = (valueBase64: string) => {
+  const parseGenericNotification = (valueBase64: string, serviceUuid?: string, charUuid?: string) => {
     try {
       const buf = Buffer.from(valueBase64, 'base64');
-      // try to detect HR-like value
-      for (let i = 0; i < buf.length; i++) {
-        const v = buf.readUInt8(i);
-        if (v >= 30 && v <= 220) {
-          // treat as heart rate candidate
-          return { heartRate: v };
-        }
-      }
-      // try steps (large integers)
+      if (!buf || buf.length === 0) return null;
+      if (isMostlyPrintableAscii(buf)) return null;
+
+      const hr = parseHeartRate(valueBase64);
+      if (typeof hr === 'number') return { heartRate: hr };
+
+      const spo2 = parseSpO2(valueBase64);
+      if (typeof spo2 === 'number') return { oxygenSaturation: spo2 };
+
+      const bp = parseBloodPressure(valueBase64);
+      if (bp) return { bloodPressure: bp };
+
       if (buf.length >= 4) {
-        const steps32 = buf.readUInt32LE(0);
-        if (steps32 > 0 && steps32 < 10000000) {
-          return { steps: steps32 };
-        }
+        try {
+          const steps32 = buf.readUInt32LE(0);
+          if (steps32 > 0 && steps32 < 10000000) return { steps: steps32 };
+        } catch {}
       }
-      // try single byte battery/spo2
+
+      // single byte — only accept as battery if characteristic/service is battery
       if (buf.length === 1) {
         const v = buf.readUInt8(0);
-        if (v >= 0 && v <= 100) {
-          // ambiguous — could be battery or spo2; we prefer battery if we don't have better
-          return { battery: v };
-        }
+        const service = (serviceUuid || '').toLowerCase();
+        const c = (charUuid || '').toLowerCase();
+        const isBattery = service.includes('180f') || c.includes('2a19');
+        if (isBattery && v >= 0 && v <= 100) return { battery: v };
+        console.log(`[BLE] Ignored single-byte vendor value (svc=${serviceUuid}, char=${charUuid}):`, v);
+        return null;
       }
+
       return null;
     } catch {
       return null;
     }
   };
 
-  // ---------- Scanning ----------
+  // ---------- device info logging helper ----------
+  // logs services and characteristics to help identify correct UUIDs
+  const logDeviceInfo = useCallback(async (device: Device) => {
+    try {
+      console.log('Discovering all services & characteristics (logDeviceInfo) ...');
+      // ensure discovery called
+      await device.discoverAllServicesAndCharacteristics().catch(() => null);
+
+      // some implementations: device.services() returns array of Service objects
+      const services: any[] = (device as any).services ? await (device as any).services() : [];
+      console.log(`logDeviceInfo: found ${services.length} services`);
+      for (const svc of services) {
+        try {
+          console.log(`Service: ${svc.uuid} (primary=${svc.isPrimary ?? 'unknown'})`);
+          const chars: any[] = svc.characteristics ? await svc.characteristics() : [];
+          console.log(`  Characteristics (${chars.length}):`);
+          for (const c of chars) {
+            const flags = [
+              c.isReadable ? 'R' : '',
+              (c.isWritableWithoutResponse || c.isWritable) ? 'W' : '',
+              c.isNotifiable ? 'N' : ''
+            ].filter(Boolean).join('');
+            console.log(`   - ${c.uuid} (${flags || 'none'})`);
+          }
+        } catch (e) {
+          console.warn('Error reading characteristics for service', svc.uuid, e);
+        }
+      }
+    } catch (e) {
+      console.warn('logDeviceInfo error', e);
+    }
+  }, []);
+
+  // ---------- scanning ----------
   const startScan = useCallback(async () => {
-    if (!bleManager) return;
+    const mgr = bleManagerRef.current;
+    if (!mgr) return;
     if (isScanning) return;
 
-    // Permissions / Location check
     const ok = await checkLocationServices();
     if (!ok) {
       showLocationServicesAlert();
@@ -246,55 +296,63 @@ export const useBLEWatch = () => {
     safeSetWatchData({ status: 'scanning' });
 
     try {
-      bleManager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-        if (error) {
-          console.error('Scan error:', error);
+      mgr.startDeviceScan(null, { allowDuplicates: false }, (err, dev) => {
+        if (!isMounted.current) return;
+        if (err) {
+          handleMonitorError(err, 'Scan');
           stopScan();
           return;
         }
-        if (device && device.id && device.name && isMounted.current) {
-          setDevices(prev => (prev.some(d => d.id === device.id) ? prev : [...prev, device]));
+        if (dev && dev.id) {
+          setDevices(prev => (prev.some(d => d.id === dev.id) ? prev : [...prev, dev]));
         }
       });
 
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = setTimeout(() => {
-        try { bleManager.stopDeviceScan(); } catch (_) {}
+        try { mgr.stopDeviceScan(); } catch (_) {}
         if (!isMounted.current) return;
         setIsScanning(false);
         safeSetWatchData(prev => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
         scanTimeoutRef.current = null;
       }, 10000);
-    } catch (err) {
-      console.error('startScan error', err);
-      safeSetWatchData({ status: 'error' });
+    } catch (e) {
+      handleMonitorError(e, 'startScan');
       setIsScanning(false);
+      safeSetWatchData({ status: 'error' });
     }
-  }, [bleManager, checkLocationServices, isScanning, stopScan, showLocationServicesAlert]);
+  }, [checkLocationServices, isScanning, showLocationServicesAlert, stopScan]);
 
-  // ---------- Connect & monitor ----------
+  // ---------- connect & monitor ----------
   const connectToDevice = useCallback(async (device: Device) => {
-    if (!bleManager) return false;
+    const mgr = bleManagerRef.current;
+    if (!mgr) return false;
 
     try {
-      // ensure bluetooth powered on
+      // ensure Bluetooth powered on (best-effort)
       try {
-        const state = await bleManager.state();
-        const isPoweredOn = state === State.PoweredOn || String(state).toLowerCase() === 'poweredon';
-        if (!isPoweredOn) throw new Error('Bluetooth not powered on');
+        await withRetry(async () => {
+          const state = await mgr.state();
+          if (!(state === BleState.PoweredOn || String(state).toLowerCase() === 'poweredon')) {
+            throw new Error('Bluetooth not powered on');
+          }
+          return state;
+        }, 2);
       } catch (e) {
-        console.warn('Unable to confirm Bluetooth state:', e);
+        // proceed but warn
+        console.warn('Bluetooth state check non-fatal:', e);
       }
 
       stopScan();
-
       safeSetWatchData({ status: 'connecting' });
 
-      const connected = await device.connect();
-      await connected.discoverAllServicesAndCharacteristics();
-
-      // store connected device
+      const connected = await withRetry(() => device.connect(), 3, 400);
+      // ensure services discovered
+      await connected.discoverAllServicesAndCharacteristics().catch(() => null);
       connectedDeviceRef.current = connected;
+
+      // log services/characteristics to help identify correct UUIDs
+      logDeviceInfo(connected).catch(() => null);
 
       // basic info
       const deviceName = device.name ?? device.id;
@@ -304,196 +362,148 @@ export const useBLEWatch = () => {
       else if (nameLower.includes('amazfit')) deviceType = 'amazfit';
       else if (nameLower.includes('firebolt')) deviceType = 'firebolt';
 
-      safeSetWatchData(prev => ({
-        ...prev,
-        status: 'connected',
-        deviceName,
-        deviceType
-      }));
+      safeSetWatchData(prev => ({ ...prev, status: 'connected', deviceName, deviceType, lastUpdated: new Date() }));
 
-      // read RSSI if possible
+      // read RSSI if available
       try {
-        // some libs expose readRSSI()
         const rr: any = (connected as any).readRSSI ? await (connected as any).readRSSI() : null;
         const rssi = typeof rr === 'number' ? rr : rr?.rssi ?? null;
         if (rssi !== null) safeSetWatchData({ rssi });
-      } catch {}
+      } catch { /* ignore */ }
 
-      // read battery (standard) if available
+      // read battery once (standard)
       try {
-        const batteryChar = await connected.readCharacteristicForService('180F', '2A19').catch(() => null);
+        const batteryChar = await withRetry(async () => {
+          return await connected.readCharacteristicForService('180F', '2A19').catch(() => null);
+        }, 2);
         if (batteryChar?.value) {
           const level = Buffer.from(batteryChar.value, 'base64').readUInt8(0);
-          safeSetWatchData({ battery: level, lastUpdated: new Date() });
+          if (level >= 0 && level <= 100) safeSetWatchData({ battery: level, lastUpdated: new Date() });
         }
       } catch (e) {
-        // ignore
+        console.warn('Battery read non-fatal error', e);
       }
 
-      // device information chars
-      try {
-        const fwChar = await connected.readCharacteristicForService('180A', '2A26').catch(() => null);
-        const hwChar = await connected.readCharacteristicForService('180A', '2A27').catch(() => null);
-        const updates: Partial<WatchData> = {};
-        if (fwChar?.value) updates.firmwareVersion = Buffer.from(fwChar.value, 'base64').toString('utf8');
-        if (hwChar?.value) updates.hardwareVersion = Buffer.from(hwChar.value, 'base64').toString('utf8');
-        if (Object.keys(updates).length) safeSetWatchData({ ...updates, lastUpdated: new Date() });
-      } catch {}
-
-      // Subscribe to standard Heart Rate (2A37)
-      try {
-        // attempt to monitor 0x180D/0x2A37 if present
-        const hrMon = connected.monitorCharacteristicForService(
-          '180D',
-          '2A37',
-          (error: any, characteristic: Characteristic | null) => {
-            if (!isMounted.current) return;
-            if (error) { console.error('HR monitor error:', error); return; }
-            if (characteristic?.value) {
-              console.log('[BLE] HR raw value (base64):', characteristic.value);
-              const parsed = parseHeartRate(characteristic.value);
-              if (typeof parsed === 'number') {
-                safeSetWatchData({ heartRate: parsed, lastUpdated: new Date() });
-              }
-            }
+      // helper: battery hysteresis using batteryRef
+      const maybeUpdateBattery = (newLevel: number, fromBatteryChar = false) => {
+        const prev = batteryRef.current;
+        if (typeof prev === 'number') {
+          if (fromBatteryChar) {
+            safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
+            return;
           }
-        );
-        monitorsRef.current.push({ cancel: () => { try { (hrMon as any).remove?.(); (hrMon as any).cancel?.(); } catch (_) {} } });
-      } catch (e) { /* ignore */ }
+          const diff = Math.abs(prev - newLevel);
+          if (newLevel >= 20 || diff <= 20) {
+            safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
+          } else {
+            console.log('[BLE] Ignored implausible battery jump', { prev, newLevel, diff, fromBatteryChar });
+          }
+        } else {
+          if (newLevel >= 0 && newLevel <= 100) safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
+        }
+      };
 
-      // Subscribe to Pulse Oximeter (0x1822 / 0x2A5F) if available
+      // monitor wrappers: DO NOT use async/await inside the callback signature (avoid returning Promises to native)
       try {
-        const spo2Mon = connected.monitorCharacteristicForService(
-          '1822',
-          '2A5F',
-          (error: any, characteristic: Characteristic | null) => {
+        const hrMon = connected.monitorCharacteristicForService('180D', '2A37', (error: any, characteristic: Characteristic | null) => {
+          try {
             if (!isMounted.current) return;
-            if (error) { console.error('SpO2 monitor error:', error); return; }
+            if (error) { handleMonitorError(error, 'HR'); return; }
             if (characteristic?.value) {
-              console.log('[BLE] SpO2 raw value:', characteristic.value);
+              const parsed = parseHeartRate(characteristic.value);
+              if (typeof parsed === 'number') safeSetWatchData({ heartRate: parsed, lastUpdated: new Date() });
+            }
+          } catch (cbErr) { handleMonitorError(cbErr, 'HR callback'); }
+        });
+        monitorsRef.current.push({ cancel: () => { try { (hrMon as any).remove?.(); (hrMon as any).cancel?.(); } catch (_) {} } });
+      } catch (e) { handleMonitorError(e, 'HR monitor setup'); }
+
+      try {
+        const spo2Mon = connected.monitorCharacteristicForService('1822', '2A5F', (error: any, characteristic: Characteristic | null) => {
+          try {
+            if (!isMounted.current) return;
+            if (error) { handleMonitorError(error, 'SpO2'); return; }
+            if (characteristic?.value) {
               const parsed = parseSpO2(characteristic.value);
               if (typeof parsed === 'number') safeSetWatchData({ oxygenSaturation: parsed, lastUpdated: new Date() });
             }
-          }
-        );
+          } catch (cbErr) { handleMonitorError(cbErr, 'SpO2 callback'); }
+        });
         monitorsRef.current.push({ cancel: () => { try { (spo2Mon as any).remove?.(); (spo2Mon as any).cancel?.(); } catch (_) {} } });
-      } catch (e) { /* ignore */ }
+      } catch (e) { handleMonitorError(e, 'SpO2 monitor setup'); }
 
-      // Subscribe to Blood Pressure (0x1810 / 0x2A35)
       try {
-        const bpMon = connected.monitorCharacteristicForService(
-          '1810',
-          '2A35',
-          (error: any, characteristic: Characteristic | null) => {
+        const bpMon = connected.monitorCharacteristicForService('1810', '2A35', (error: any, characteristic: Characteristic | null) => {
+          try {
             if (!isMounted.current) return;
-            if (error) { console.error('BP monitor error:', error); return; }
+            if (error) { handleMonitorError(error, 'BP'); return; }
             if (characteristic?.value) {
-              console.log('[BLE] BP raw:', characteristic.value);
               const parsedBP = parseBloodPressure(characteristic.value);
               if (parsedBP) safeSetWatchData({ bloodPressure: parsedBP, lastUpdated: new Date() });
             }
-          }
-        );
+          } catch (cbErr) { handleMonitorError(cbErr, 'BP callback'); }
+        });
         monitorsRef.current.push({ cancel: () => { try { (bpMon as any).remove?.(); (bpMon as any).cancel?.(); } catch (_) {} } });
-      } catch (e) { /* ignore */ }
+      } catch (e) { handleMonitorError(e, 'BP monitor setup'); }
 
-      // Device-specific / generic discovery: iterate services & characteristics and subscribe heuristically
+      // vendor characteristics: subscribe to notifiable vendor chars but do not treat single-byte vendor values as battery
       try {
-        // Attempt to read all services & characteristics if API supports it
         const services: any[] = (connected as any).services ? await (connected as any).services() : [];
         for (const s of services) {
           try {
-            const chars: any[] = (connected as any).characteristicsForService ? await (connected as any).characteristicsForService(s.uuid) : [];
+            const chars: any[] = s.characteristics ? await s.characteristics() : [];
             for (const c of chars) {
               const charUuid = (c.uuid || '').toLowerCase();
-              const svcUuid = (s.uuid || '').toLowerCase();
-              // Skip if already handled by standard UUIDs
               if (charUuid.includes('2a37') || charUuid.includes('2a19') || charUuid.includes('2a5f') || charUuid.includes('2a35')) continue;
-
-              // attempt to monitor if notifiable
-              // Some char objects expose isNotifiable / isNotifying flags
               const isNotifiable = !!(c.isNotifiable || c.isNotifying || (c.properties && (c.properties.includes?.('Notify') || c.properties.includes?.('notify'))));
-
-              if (isNotifiable) {
-                try {
-                  const sub = connected.monitorCharacteristicForService(s.uuid, c.uuid, (err: any, char: Characteristic | null) => {
+              if (!isNotifiable) continue;
+              try {
+                const sub = connected.monitorCharacteristicForService(s.uuid, c.uuid, (err: any, char: Characteristic | null) => {
+                  try {
                     if (!isMounted.current) return;
-                    if (err) {
-                      // ignore per char
-                      return;
-                    }
+                    if (err) { handleMonitorError(err, `Generic ${s.uuid}/${c.uuid}`); return; }
                     if (!char?.value) return;
-                    console.log(`[BLE] Generic notification from ${s.uuid} / ${c.uuid}:`, char.value);
-                    // heuristics
-                    const hr = parseHeartRate(char.value);
-                    if (typeof hr === 'number') {
-                      safeSetWatchData({ heartRate: hr, lastUpdated: new Date() });
-                      return;
-                    }
-                    const spo2 = parseSpO2(char.value);
-                    if (typeof spo2 === 'number') {
-                      safeSetWatchData({ oxygenSaturation: spo2, lastUpdated: new Date() });
-                      return;
-                    }
-                    const bp = parseBloodPressure(char.value);
-                    if (bp) {
-                      safeSetWatchData({ bloodPressure: bp, lastUpdated: new Date() });
-                      return;
-                    }
-                    const generic = parseGenericNotification(char.value);
+                    const generic = parseGenericNotification(char.value, s.uuid, c.uuid);
                     if (generic) {
-                      safeSetWatchData({ ...generic, lastUpdated: new Date() });
-                      return;
+                      if ((generic as any).battery !== undefined) {
+                        // only accept battery if from official battery char/service
+                        maybeUpdateBattery((generic as any).battery, (s.uuid || '').toLowerCase().includes('180f') || (c.uuid || '').toLowerCase().includes('2a19'));
+                      } else {
+                        safeSetWatchData({ ...generic, lastUpdated: new Date() });
+                      }
                     }
-                  });
-                  monitorsRef.current.push({ cancel: () => { try { (sub as any).remove?.(); (sub as any).cancel?.(); } catch (_) {} } });
-                } catch (_) {}
-              } else {
-                // If readable, attempt to read once
-                try {
-                  const readChar = await connected.readCharacteristicForService(s.uuid, c.uuid).catch(() => null);
-                  if (readChar?.value) {
-                    console.log(`[BLE] Read ${s.uuid}/${c.uuid}:`, readChar.value);
-                    const hr = parseHeartRate(readChar.value);
-                    if (typeof hr === 'number') safeSetWatchData({ heartRate: hr, lastUpdated: new Date() });
-                    const spo2 = parseSpO2(readChar.value);
-                    if (typeof spo2 === 'number') safeSetWatchData({ oxygenSaturation: spo2, lastUpdated: new Date() });
-                    const bp = parseBloodPressure(readChar.value);
-                    if (bp) safeSetWatchData({ bloodPressure: bp, lastUpdated: new Date() });
-                    const generic = parseGenericNotification(readChar.value);
-                    if (generic) safeSetWatchData({ ...generic, lastUpdated: new Date() });
-                  }
-                } catch (_) {}
+                  } catch (cbErr) { handleMonitorError(cbErr, `Generic callback ${s.uuid}/${c.uuid}`); }
+                });
+                monitorsRef.current.push({ cancel: () => { try { (sub as any).remove?.(); (sub as any).cancel?.(); } catch (_) {} } });
+              } catch (e) {
+                console.warn('Generic monitor setup failed for', s.uuid, c.uuid, e);
               }
             }
-          } catch (_) {}
+          } catch (e) {
+            // ignore per-service failures
+          }
         }
       } catch (e) {
-        // some platforms do not support services()/characteristicsForService() — it's best-effort
-      }
-
-      // If the device is a known vendor, you can add extra service/char subscriptions here.
-      // Example (Mi Band / Amazfit / Firebolt heuristics) — best-effort logic:
-      if (deviceType === 'miband') {
-        // Many Mi Band devices use vendor-specific chars. We already set up generic monitors above.
-      } else if (deviceType === 'amazfit') {
-        // likewise
-      } else if (deviceType === 'firebolt') {
-        // likewise
+        console.warn('services enumeration failed (non-fatal):', e);
       }
 
       return true;
-    } catch (error) {
-      console.error('Connection Error:', error);
-      safeSetWatchData({ status: 'error' });
+    } catch (e) {
+      handleMonitorError(e, 'connectToDevice');
       return false;
     }
-  }, [bleManager, stopScan]);
+  }, [stopScan, logDeviceInfo]);
 
+  // ---------- disconnect ----------
   const disconnectDevice = useCallback(async () => {
     try {
       stopScan();
       clearAllMonitors();
+      try {
+        if (connectedDeviceRef.current) {
+          await connectedDeviceRef.current.cancelConnection().catch(() => null);
+        }
+      } catch (_) {}
       connectedDeviceRef.current = null;
       safeSetWatchData({ status: 'disconnected' });
       setDevices([]);
@@ -503,21 +513,15 @@ export const useBLEWatch = () => {
     }
   }, [stopScan]);
 
-  // ---------- Sync (Supabase) ----------
+  // ---------- sync to Supabase (runs outside monitor callbacks) ----------
   const syncToSupabase = useCallback(async () => {
     if (watchData.status !== 'connected' || !watchData.deviceName) {
       return { success: false, error: 'No device connected' };
     }
     try {
-      const {
-        data: { user },
-        error: authError
-      } = await supabase.auth.getUser();
-
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError) throw authError;
       if (!user) throw new Error('User not authenticated');
-
-      // call saveHealthMetrics (assumed to accept (userId, watchData))
       const result = await saveHealthMetrics(user.id, watchData);
       return { success: true, data: result };
     } catch (error: any) {
@@ -526,66 +530,81 @@ export const useBLEWatch = () => {
     }
   }, [watchData]);
 
-  // manual sync helper
-  const syncDeviceData = useCallback(async () => {
-    // This triggers a refresh of readable characteristics (best-effort)
-    try {
-      if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
-      const dev = connectedDeviceRef.current;
-      // Read battery again
-      try {
-        const batteryChar = await dev.readCharacteristicForService('180F', '2A19').catch(() => null);
-        if (batteryChar?.value) {
-          const level = Buffer.from(batteryChar.value, 'base64').readUInt8(0);
-          safeSetWatchData({ battery: level, lastUpdated: new Date() });
-        }
-      } catch {}
-
-      // You can attempt other reads here; for most vendor metrics, rely on notifications (we've set up monitors)
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err?.message ?? String(err) };
-    }
-  }, []);
-
-  // auto-sync effect when watchData updates
+  // auto-sync effect: debounce + only when meaningful changes present
   useEffect(() => {
     const autoSync = async () => {
       if (watchData.status === 'connected' && watchData.deviceName && watchData.lastUpdated) {
-        setIsSyncing(true);
-        setSyncError(null);
-        const res = await syncToSupabase();
-        if (res.success) setLastSync(new Date());
-        else setSyncError(res.error ?? 'Failed to sync');
-        setIsSyncing(false);
+        try {
+          setIsSyncing(true);
+          setSyncError(null);
+
+          const hasHealthData = watchData.heartRate !== undefined || watchData.bloodPressure !== undefined || watchData.oxygenSaturation !== undefined || watchData.steps !== undefined || watchData.battery !== undefined;
+          if (!hasHealthData) return;
+
+          const res = await syncToSupabase();
+          if (res.success) setLastSync(new Date());
+          else setSyncError(res.error ?? 'Failed to sync');
+        } catch (err) {
+          console.error('Auto-sync error', err);
+          setSyncError(err instanceof Error ? err.message : 'Unknown sync error');
+        } finally {
+          setIsSyncing(false);
+        }
       }
     };
-    if (watchData.lastUpdated) autoSync();
-  }, [watchData.lastUpdated, watchData.status, watchData.deviceName, syncToSupabase]);
 
-  // cleanup on unmount
+    const timer = setTimeout(() => {
+      if (watchData.lastUpdated) autoSync();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [watchData, syncToSupabase]);
+
+  // ---------- manager lifecycle ----------
   useEffect(() => {
+    if (!bleManagerRef.current) {
+      try { bleManagerRef.current = new BleManager(); } catch (e) { console.error('BleManager init failed', e); }
+    }
+    const mgr = bleManagerRef.current;
+    isMounted.current = true;
+
+    // subscribe to BLE state changes
+    let sub: { remove?: () => void } | null = null;
+    try {
+      sub = mgr?.onStateChange((state) => {
+        try {
+          if (!isMounted.current) return;
+          if (String(state).toLowerCase() === 'poweredoff' || state === BleState.PoweredOff) {
+            Alert.alert('Bluetooth is Off', 'Please enable Bluetooth to connect to devices.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+            ]);
+          }
+        } catch (err) { console.warn('stateChange handler error', err); }
+      }, true) ?? null;
+    } catch (e) {
+      console.warn('onStateChange subscription failed', e);
+    }
+
     return () => {
       isMounted.current = false;
-      if (scanTimeoutRef.current) {
-        clearTimeout(scanTimeoutRef.current);
-        scanTimeoutRef.current = null;
-      }
-      try { bleManager.stopDeviceScan(); } catch (_) {}
+      if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
+      try { mgr?.stopDeviceScan(); } catch (_) {}
       clearAllMonitors();
-      try { bleManager.destroy(); } catch (_) {}
+      try { mgr?.destroy(); } catch (_) {}
+      if (sub?.remove) try { sub.remove(); } catch (_) {}
+      bleManagerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // additional defensive cleanup effect
+  // cleanup monitors on unmount too
   useEffect(() => {
     return () => {
       clearAllMonitors();
-      try { bleManager.stopDeviceScan(); } catch (_) {}
+      try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
     };
-  }, [bleManager]);
+  }, []);
 
+  // expose API
   return {
     watchData,
     devices,
@@ -597,17 +616,30 @@ export const useBLEWatch = () => {
     stopScan,
     connectToDevice,
     disconnectDevice,
-    syncDeviceData,
-    syncToSupabase, // <--- exported so HealthScreen can call it
-    // Sync status
+    syncToSupabase,
+    syncDeviceData: async () => {
+      // simple on-demand refresh (reads battery only)
+      try {
+        if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
+        const dev = connectedDeviceRef.current;
+        const batteryChar = await dev.readCharacteristicForService('180F', '2A19').catch(() => null);
+        if (batteryChar?.value) {
+          const level = Buffer.from(batteryChar.value, 'base64').readUInt8(0);
+          if (level >= 0 && level <= 100) safeSetWatchData({ battery: level, lastUpdated: new Date() });
+        }
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err?.message ?? String(err) };
+      }
+    },
     isSyncing,
     lastSync,
     syncError,
-    // WebView compatibility fields (no-ops)
     webViewRef: { current: null as any },
     handleMessage: () => {},
     handleError: () => {},
     handleWebViewLoad: () => {}
   };
 };
+
 export default useBLEWatch;

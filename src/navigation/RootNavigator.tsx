@@ -1,4 +1,5 @@
 import React from 'react';
+import { BLEErrorBoundary } from '../components/BLEErrorBoundary';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useTheme } from '../contexts/theme/ThemeContext';
 
@@ -227,11 +228,16 @@ const RootNavigator = () => {
         {/* Health Screen */}
         <Stack.Screen
           name="Health"
-          component={HealthScreen}
           options={{
             headerShown: false
           }}
-        />
+        >
+          {props => (
+            <BLEErrorBoundary>
+              <HealthScreen {...props} />
+            </BLEErrorBoundary>
+          )}
+        </Stack.Screen>
 
         {/* Appointments Screen */}
         <Stack.Screen
