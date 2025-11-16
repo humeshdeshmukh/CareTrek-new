@@ -313,35 +313,52 @@ const HealthScreen: React.FC = () => {
     return content;
   });
 
-  // Sync status renderer (new)
+  // Handle sync press
+  const handleSyncPress = useCallback(async () => {
+    try {
+      if (typeof syncDeviceData === 'function') {
+        const result = await syncDeviceData();
+        if (result?.success) {
+          Alert.alert('Success', 'Data synced successfully!');
+        } else {
+          Alert.alert('Error', result?.error || 'Failed to sync data');
+        }
+      } else {
+        Alert.alert('Error', 'Sync function not available');
+      }
+    } catch (error: any) {
+      console.error('Sync error:', error);
+      Alert.alert('Error', error?.message || 'An error occurred while syncing');
+    }
+  }, [syncDeviceData]);
+
+  // Sync status renderer with sync button
   const renderSyncStatus = () => {
-    if (isSyncing) {
-      return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-          <ActivityIndicator size="small" color={isDark ? '#4FD1C5' : '#007AFF'} style={{ marginRight: 8 }} />
-          <Text style={{ color: isDark ? '#A0AEC0' : '#666', fontSize: 12 }}>Syncing data...</Text>
-        </View>
-      );
-    }
-
-    if (syncError) {
-      return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-          <Ionicons name="warning" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
-          <Text style={{ color: '#FF3B30', fontSize: 12 }}>Sync failed</Text>
-        </View>
-      );
-    }
-
-    if (lastSync) {
-      return (
-        <Text style={{ color: isDark ? '#A0AEC0' : '#666', fontSize: 12, marginTop: 8 }}>
-          Last synced {formatDistanceToNow(lastSync, { addSuffix: true })}
-        </Text>
-      );
-    }
-
-    return null;
+    return (
+      <View style={{ marginTop: 12, width: '100%' }}>
+        <Button
+          title={isSyncing ? "Syncing..." : "Sync Now"}
+          onPress={handleSyncPress}
+          disabled={isSyncing}
+          color={isDark ? '#4FD1C5' : undefined}
+        />
+        {!isSyncing && syncError && (
+          <Text style={{ color: '#FF3B30', fontSize: 12, marginTop: 4, textAlign: 'center' }}>
+            Sync failed: {syncError}
+          </Text>
+        )}
+        {!isSyncing && lastSync && (
+          <Text style={{ 
+            color: isDark ? '#A0AEC0' : '#666', 
+            fontSize: 12, 
+            marginTop: 4,
+            textAlign: 'center'
+          }}>
+            Last synced {formatDistanceToNow(lastSync, { addSuffix: true })}
+          </Text>
+        )}
+      </View>
+    );
   };
 
   // If connecting show loading
@@ -442,84 +459,11 @@ const HealthScreen: React.FC = () => {
             {/* Sync status appears under device details */}
             {renderSyncStatus()}
 
-            {/* Manual Sync Now button */}
-            <View style={{ marginTop: 12 }}>
-              <Button
-                title="Sync Now"
-                onPress={async () => {
-                  try {
-                    if (typeof syncToSupabase !== 'function') {
-                      Alert.alert('Error', 'Sync function not available');
-                      return;
-                    }
-                    const { success, error } = await syncToSupabase(supabase);
-                    if (success) {
-                      Alert.alert('Success', 'Data synced successfully!');
-                    } else {
-                      Alert.alert('Error', error || 'Failed to sync data');
-                    }
-                  } catch (err: any) {
-                    Alert.alert('Error', err?.message || 'An unexpected error occurred');
-                  }
-                }}
-                disabled={!!isSyncing}
-                color={isDark ? '#4FD1C5' : undefined}
-              />
-            </View>
-
-            {/* Optional debug: dump available services & characteristics.
-                This calls `listServices()` if your hook exposes it. The hook-side
-                debug snippet you can add is shown below (recommended to paste
-                inside your useBLEWatch.connectToDevice after connection):
-                
-                // In connectToDevice function, after connecting:
-                const services = await connected.services();
-                console.log('Available services:', services);
-                for (const service of services) {
-                  const characteristics = await service.characteristics();
-                  console.log(`Service ${service.uuid} characteristics:`, characteristics);
-                }
-             */}
-            <View style={{ marginTop: 12 }}>
-              <Button
-                title="Debug Info"
-                onPress={() => {
-                  console.log('Current watch data:', watchData);
-                  Alert.alert(
-                    'Debug Info',
-                    `Status: ${watchData?.status || 'unknown'}
-                    Device: ${watchData?.deviceName || 'N/A'}
-                    Last Updated: ${watchData?.lastUpdated?.toISOString() || 'N/A'}`,
-                    [{ text: 'OK' }]
-                  );
-                }}
-                color={isDark ? '#4FD1C5' : undefined}
-              />
-            </View>
-
           </View>
         )}
       </View>
 
-      {/* --- DEBUG: explicit Health metric block (shows heart rate + status + lastUpdated) --- */}
-      <View style={[styles.healthMetric, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9' }]}>
-        <Text style={[styles.metricLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-          Heart Rate (DEBUG)
-        </Text>
-        <Text style={[styles.metricValue, { color: isDark ? '#F8FAFC' : '#0F172A' }]}>
-          {watchData?.heartRate ? `${watchData.heartRate} BPM` : '--'}
-        </Text>
-        <Text style={[styles.lastUpdated, { color: isDark ? '#64748B' : '#94A3B8' }]}>
-          Status: {watchData?.status || 'disconnected'}
-        </Text>
-        {watchData?.lastUpdated && (
-          <Text style={[styles.lastUpdated, { color: isDark ? '#64748B' : '#94A3B8' }]}>
-            Updated: {new Date(watchData.lastUpdated).toLocaleTimeString()}
-          </Text>
-        )}
-      </View>
-
-      {/* Health Metrics */}
+{/* Health Metrics */}
       <View style={styles.metricsGrid}>
         <View style={styles.metricsRow}>
           <HealthMetric
