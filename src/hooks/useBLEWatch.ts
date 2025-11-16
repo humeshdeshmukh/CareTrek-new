@@ -1,4 +1,5 @@
 // src/hooks/useBLEWatch.ts
+// Defensive BLE hook with improved vendor parsing + stability filter
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { BleManager, Device, Characteristic, State as BleState } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
@@ -46,7 +47,10 @@ export const useBLEWatch = () => {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  // ---------- utilities ----------
+  // stability filter: map metric -> {lastValue, stableCount}
+  const stableRef = useRef<Record<string, { last?: any; count: number }>>({});
+
+  // ---------- small utilities ----------
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
   const isPrintableText = (buf: Buffer) => {
     if (!buf || buf.length === 0) return false;
@@ -82,7 +86,6 @@ export const useBLEWatch = () => {
     const code = (obj as any).code ?? 'UNKNOWN';
     const reason = (obj as any).reason ?? message;
     console.error(`[${name}] monitor error:`, { message, code, reason, original: obj });
-    // For monitor-level errors we log only (non-fatal). For connection-level errors we set status later.
     return { message, code, reason };
   };
 
@@ -94,17 +97,54 @@ export const useBLEWatch = () => {
     throw last || new Error('Unknown retry error');
   };
 
-  // ---------- parsers ----------
+  // ---------- metrics stability helper ----------
+  const updateStableMetric = (key: string, value: any, acceptAfter = 2) => {
+    const entry = stableRef.current[key] || { last: undefined, count: 0 };
+    if (entry.last === value) {
+      entry.count = Math.min(entry.count + 1, acceptAfter);
+    } else {
+      entry.last = value;
+      entry.count = 1;
+    }
+    stableRef.current[key] = entry;
+    if (entry.count >= acceptAfter) {
+      // commit to watchData
+      if (key === 'heartRate') safeSetWatchData({ heartRate: value, lastUpdated: new Date() });
+      else if (key === 'oxygenSaturation') safeSetWatchData({ oxygenSaturation: value, lastUpdated: new Date() });
+      else if (key === 'steps') safeSetWatchData({ steps: value, lastUpdated: new Date() });
+      else if (key === 'battery') safeSetWatchData({ battery: value, lastUpdated: new Date() });
+      else if (key === 'calories') safeSetWatchData({ calories: value, lastUpdated: new Date() });
+      else if (key === 'bloodPressure' && value && typeof value === 'object') safeSetWatchData({ bloodPressure: value, lastUpdated: new Date() });
+    }
+  };
+
+  // ---------- parsers improved ----------
   const parseHeartRate = (b64: string): number | undefined => {
     try {
       const buf = Buffer.from(b64, 'base64');
-      if (!buf || buf.length < 2) return undefined;
+      if (!buf || buf.length === 0) return undefined;
       if (isPrintableText(buf)) return undefined;
-      const flags = buf.readUInt8(0);
-      const is16 = (flags & 0x01) !== 0;
-      const hr = is16 ? buf.readUInt16LE(1) : buf.readUInt8(1);
-      if (!Number.isFinite(hr) || hr < 30 || hr > 220) return undefined;
-      return clamp(hr, 30, 220);
+
+      // Case A: standard HR frame (flag + hr)
+      if (buf.length >= 2) {
+        const flags = buf.readUInt8(0);
+        const is16 = (flags & 0x01) !== 0;
+        const hr = is16 ? (buf.length >= 3 ? buf.readUInt16LE(1) : undefined) : buf.readUInt8(1);
+        if (typeof hr === 'number' && hr >= 30 && hr <= 220) return clamp(hr, 30, 220);
+      }
+
+      // Case B: vendor sends a single byte HR (common)
+      if (buf.length === 1) {
+        const v = buf.readUInt8(0);
+        if (v >= 30 && v <= 220) return clamp(v, 30, 220);
+      }
+
+      // Case C: search any byte for HR-like value
+      for (let i = 0; i < buf.length; i++) {
+        const v = buf.readUInt8(i);
+        if (v >= 30 && v <= 220) return clamp(v, 30, 220);
+      }
+      return undefined;
     } catch { return undefined; }
   };
 
@@ -113,11 +153,13 @@ export const useBLEWatch = () => {
       const buf = Buffer.from(b64, 'base64');
       if (!buf || buf.length === 0) return undefined;
       if (isPrintableText(buf)) return undefined;
+      // single byte spo2 (50-100)
       if (buf.length === 1) {
         const v = buf.readUInt8(0);
         if (v >= 50 && v <= 100) return clamp(v, 50, 100);
         return undefined;
       }
+      // scan for plausible bytes
       for (let i = 0; i < buf.length; i++) {
         const v = buf.readUInt8(i);
         if (v >= 50 && v <= 100) return clamp(v, 50, 100);
@@ -126,40 +168,136 @@ export const useBLEWatch = () => {
     } catch { return undefined; }
   };
 
+  // Try multiple interpretations for BP: uint16 LE/BE pairs at offsets 0 and 2
   const parseBloodPressure = (b64: string): { systolic: number; diastolic: number } | undefined => {
     try {
       const buf = Buffer.from(b64, 'base64');
-      if (!buf || buf.length < 4) return undefined;
+      if (!buf || buf.length < 2) return undefined;
       if (isPrintableText(buf)) return undefined;
-      const sys = buf.readUInt16LE(0);
-      const dia = buf.readUInt16LE(2);
-      if (!Number.isFinite(sys) || !Number.isFinite(dia)) return undefined;
-      if (sys < 70 || sys > 260 || dia < 40 || dia > 200 || sys <= dia) return undefined;
-      return { systolic: clamp(sys, 70, 260), diastolic: clamp(dia, 40, 200) };
+
+      const candidates: Array<{ sys: number; dia: number }> = [];
+
+      // If at least 4 bytes, try (0..1) and (2..3) as LE/BE
+      if (buf.length >= 4) {
+        const sLE = buf.readUInt16LE(0);
+        const dLE = buf.readUInt16LE(2);
+        candidates.push({ sys: sLE, dia: dLE });
+
+        const sBE = buf.readUInt16BE(0);
+        const dBE = buf.readUInt16BE(2);
+        candidates.push({ sys: sBE, dia: dBE });
+      }
+
+      // If 2 bytes only, try interpret as systolic and estimate diastolic (some devices encode compressed)
+      if (buf.length === 2) {
+        const valLE = buf.readUInt16LE(0);
+        const valBE = buf.readUInt16BE(0);
+        // treat as systolic, set diastolic = systolic - typical delta if plausible
+        if (valLE >= 70 && valLE <= 260) candidates.push({ sys: valLE, dia: Math.max(40, valLE - 40) });
+        if (valBE >= 70 && valBE <= 260) candidates.push({ sys: valBE, dia: Math.max(40, valBE - 40) });
+      }
+
+      // Evaluate candidates and pick the first plausible one
+      for (const c of candidates) {
+        const { sys, dia } = c;
+        if (Number.isFinite(sys) && Number.isFinite(dia) && sys >= 70 && sys <= 260 && dia >= 40 && dia <= 200 && sys > dia) {
+          return { systolic: clamp(sys, 70, 260), diastolic: clamp(dia, 40, 200) };
+        }
+      }
+
+      // As last resort, scan buffer bytes for two plausible bytes (rare)
+      for (let i = 0; i + 1 < buf.length; i++) {
+        const a = buf.readUInt8(i), b = buf.readUInt8(i + 1);
+        if (a >= 70 && a <= 260 && b >= 40 && b <= 200 && a > b) return { systolic: a, diastolic: b };
+      }
+
+      return undefined;
     } catch { return undefined; }
   };
 
+  const parseCalories = (b64: string): number | undefined => {
+    try {
+      const buf = Buffer.from(b64, 'base64');
+      if (!buf || buf.length === 0) return undefined;
+      if (isPrintableText(buf)) return undefined;
+      // try 2/3/4 byte little-endian int
+      if (buf.length >= 2) {
+        try {
+          const v2 = buf.readUInt16LE(0);
+          if (v2 > 0 && v2 < 200000) return v2;
+        } catch {}
+      }
+      if (buf.length >= 3) {
+        try {
+          const v3 = buf.readUIntLE(0, 3);
+          if (v3 > 0 && v3 < 200000) return v3;
+        } catch {}
+      }
+      if (buf.length >= 4) {
+        try {
+          const v4 = buf.readUInt32LE(0);
+          if (v4 > 0 && v4 < 200000) return v4;
+        } catch {}
+      }
+      // scan bytes for plausible calories (e.g., 10..20000)
+      for (let i = 0; i < buf.length; i++) {
+        const v = buf.readUInt8(i);
+        if (v > 10 && v < 20000) return v;
+      }
+      return undefined;
+    } catch { return undefined; }
+  };
+
+  // Generic heuristics: try to extract HR/SPo2/BP/steps/calories from vendor notifications
   const parseGeneric = (b64: string, svc?: string, char?: string) => {
     try {
       const buf = Buffer.from(b64, 'base64');
       if (!buf || buf.length === 0) return null;
       if (isPrintableText(buf)) return null;
-      const hr = parseHeartRate(b64); if (typeof hr === 'number') return { heartRate: hr };
-      const spo2 = parseSpO2(b64); if (typeof spo2 === 'number') return { oxygenSaturation: spo2 };
-      const bp = parseBloodPressure(b64); if (bp) return { bloodPressure: bp };
+
+      // 1) Heart rate: single or found anywhere
+      const hr = parseHeartRate(b64);
+      if (typeof hr === 'number') return { heartRate: hr };
+
+      // 2) SpO2:
+      const spo2 = parseSpO2(b64);
+      if (typeof spo2 === 'number') return { oxygenSaturation: spo2 };
+
+      // 3) BP:
+      const bp = parseBloodPressure(b64);
+      if (bp) return { bloodPressure: bp };
+
+      // 4) calories:
+      const cal = parseCalories(b64);
+      if (typeof cal === 'number' && cal > 0 && cal < 200000) return { calories: cal };
+
+      // 5) steps (32-bit LE but require > 100 and plausibility)
       if (buf.length >= 4) {
-        try { const s = buf.readUInt32LE(0); if (s > 0 && s < 1e7) return { steps: s }; } catch {}
+        try {
+          const steps = buf.readUInt32LE(0);
+          if (steps > 50 && steps < 100000000) return { steps };
+        } catch {}
       }
+
+      // 6) single-byte ambiguous: if service isn't battery and value within HR range -> HR
       if (buf.length === 1) {
         const v = buf.readUInt8(0);
-        const s = (svc || '').toLowerCase(); const c = (char || '').toLowerCase();
+        const s = (svc || '').toLowerCase();
+        const c = (char || '').toLowerCase();
         const isBattery = s.includes('180f') || c.includes('2a19');
-        if (isBattery && v >= 0 && v <= 100) return { battery: v };
-        console.log(`[BLE] Ignored single-byte vendor value svc=${svc} char=${char} val=${v}`);
-        return null;
+        if (!isBattery) {
+          if (v >= 30 && v <= 220) return { heartRate: v };
+          if (v >= 50 && v <= 100) return { oxygenSaturation: v };
+        } else {
+          // official battery
+          if (v >= 0 && v <= 100) return { battery: v };
+        }
       }
+
       return null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
   // ---------- discover & log device info (with flags) ----------
@@ -168,7 +306,6 @@ export const useBLEWatch = () => {
       console.log('Discovering all services & characteristics (logDeviceInfo) ...');
       await device.discoverAllServicesAndCharacteristics().catch(() => null);
 
-      // Build maps: serviceSet, charSet, svcToChars(with flags)
       const serviceSet = new Set<string>();
       const charSet = new Set<string>();
       const svcToChars = new Map<string, CharFlags[]>();
@@ -182,9 +319,7 @@ export const useBLEWatch = () => {
           serviceSet.add(svcUuid);
           console.log(`Service: ${svcUuid} (primary=${svc.isPrimary ?? 'unknown'})`);
           let chars: any[] = [];
-          try {
-            chars = (svc.characteristics ? await svc.characteristics() : []);
-          } catch (e) { /* ignore per-service char list failure */ }
+          try { chars = (svc.characteristics ? await svc.characteristics() : []); } catch (e) { /* ignore */ }
 
           svcToChars.set(svcUuid, []);
           console.log(`  Characteristics (${chars.length}):`);
@@ -198,7 +333,6 @@ export const useBLEWatch = () => {
                 isWritable: !!(c.isWritable || c.isWritableWithoutResponse),
                 isNotifiable: !!c.isNotifiable
               };
-              // if properties present as array/string, try to detect notify/read/write
               if (!flags.isNotifiable && c.properties && Array.isArray(c.properties)) {
                 flags.isNotifiable = c.properties.some((p: string) => p.toLowerCase().includes('notify'));
                 flags.isReadable = flags.isReadable || c.properties.some((p: string) => p.toLowerCase().includes('read'));
@@ -252,7 +386,10 @@ export const useBLEWatch = () => {
 
   const stopScan = useCallback(() => {
     try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
-    if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
     if (isMounted.current) {
       setIsScanning(false);
       safeSetWatchData(prev => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
@@ -266,7 +403,10 @@ export const useBLEWatch = () => {
     if (isScanning) return;
 
     const ok = await checkLocationServices();
-    if (!ok) { safeSetWatchData({ status: 'error' }); return; }
+    if (!ok) {
+      safeSetWatchData({ status: 'error' });
+      return;
+    }
 
     setDevices([]);
     setIsScanning(true);
@@ -344,33 +484,24 @@ export const useBLEWatch = () => {
           const batteryChar = await withRetry(async () => connected.readCharacteristicForService('180F', '2A19').catch(() => null), 2).catch(() => null);
           if (batteryChar?.value) {
             const level = Buffer.from(batteryChar.value, 'base64').readUInt8(0);
-            if (level >= 0 && level <= 100) safeSetWatchData({ battery: level, lastUpdated: new Date() });
+            if (level >= 0 && level <= 100) {
+              updateStableMetric('battery', level, 1); // battery can update immediately
+            }
           }
         }
       } catch (e) { console.warn('Battery read non-fatal', e); }
 
-      const maybeUpdateBattery = (newLevel: number, fromBatteryChar = false) => {
-        const prev = batteryRef.current;
-        if (typeof prev === 'number') {
-          if (fromBatteryChar) { safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() }); return; }
-          const diff = Math.abs(prev - newLevel);
-          if (newLevel >= 20 || diff <= 20) safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
-          else console.log('[BLE] Ignored implausible battery jump', { prev, newLevel, diff, fromBatteryChar });
-        } else {
-          if (newLevel >= 0 && newLevel <= 100) safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
-        }
+      const maybeUpdateBatteryLocal = (newLevel: number, fromBatteryChar = false) => {
+        if (fromBatteryChar) updateStableMetric('battery', clamp(newLevel, 0, 100), 1);
+        else updateStableMetric('battery', clamp(newLevel, 0, 100), 2);
       };
 
-      // Helper to subscribe safely only if char flagged notifiable in svcToChars
-      const subscribeIfNotifiable = (svcUuid: string, charUuid: string, handler: (char: Characteristic | null) => void) => {
+      // Helper: subscribe only if char is flagged notifiable
+      const subscribeIfNotifiable = (svcUuid: string, charUuid: string, handler: (char: Characteristic | null, svc?: string, char?: string) => void) => {
         try {
           const chars = svcToChars.get(svcUuid) || [];
           const found = chars.find(c => c.uuid === charUuid);
-          if (!found || !found.isNotifiable) {
-            // skip if not explicitly notifiable
-            return;
-          }
-          // avoid duplicate subscription
+          if (!found || !found.isNotifiable) return;
           const subId = `${svcUuid}:${charUuid}`;
           if (subscribedCharsRef.current.has(subId)) return;
           subscribedCharsRef.current.add(subId);
@@ -379,70 +510,69 @@ export const useBLEWatch = () => {
             try {
               if (!isMounted.current) return;
               if (err) { handleMonitorError(err, `Monitor ${svcUuid}/${charUuid}`); return; }
-              handler(characteristic);
+              handler(characteristic, svcUuid, charUuid);
             } catch (cbErr) { handleMonitorError(cbErr, `Callback ${svcUuid}/${charUuid}`); }
           });
-
           monitorsRef.current.push({ id: subId, cancel: () => { try { (sub as any).remove?.(); (sub as any).cancel?.(); } catch (_) {} } });
-        } catch (e) {
-          // subscription attempts may throw; handle non-fatally
-          handleMonitorError(e, `subscribeIfNotifiable ${svcUuid}/${charUuid}`);
-        }
+        } catch (e) { handleMonitorError(e, `subscribeIfNotifiable ${svcUuid}/${charUuid}`); }
       };
 
-      // Heart Rate monitor (if present + notifiable)
+      // Heart Rate (if present)
       if (serviceSet.has('0000180d-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('0000180d-0000-1000-8000-00805f9b34fb', '00002a37-0000-1000-8000-00805f9b34fb', (characteristic) => {
           if (!characteristic?.value) return;
           const hr = parseHeartRate(characteristic.value);
-          if (typeof hr === 'number') safeSetWatchData({ heartRate: hr, lastUpdated: new Date() });
+          if (typeof hr === 'number') updateStableMetric('heartRate', hr, 2);
         });
       }
 
-      // SpO2 monitor — only if service/char exist and flagged notifiable
+      // SpO2
       if (serviceSet.has('00001822-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('00001822-0000-1000-8000-00805f9b34fb', '00002a5f-0000-1000-8000-00805f9b34fb', (characteristic) => {
           if (!characteristic?.value) return;
           const s = parseSpO2(characteristic.value);
-          if (typeof s === 'number') safeSetWatchData({ oxygenSaturation: s, lastUpdated: new Date() });
+          if (typeof s === 'number') updateStableMetric('oxygenSaturation', s, 2);
         });
       }
 
-      // Blood Pressure monitor
+      // Blood Pressure
       if (serviceSet.has('00001810-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('00001810-0000-1000-8000-00805f9b34fb', '00002a35-0000-1000-8000-00805f9b34fb', (characteristic) => {
           if (!characteristic?.value) return;
           const bp = parseBloodPressure(characteristic.value);
-          if (bp) safeSetWatchData({ bloodPressure: bp, lastUpdated: new Date() });
+          if (bp) updateStableMetric('bloodPressure', bp, 2);
         });
       }
 
-      // Vendor/generic monitors: only subscribe to those flagged isNotifiable
+      // Vendor generic: subscribe to vendor chars flagged notifiable and apply heuristics
       try {
         for (const [svcUuid, charList] of Array.from(svcToChars.entries())) {
           for (const c of charList) {
             const lowChar = c.uuid;
-            // skip already-handled standard ones
-            if (['00002a37-0000-1000-8000-00805f9b34fb','00002a19-0000-1000-8000-00805f9b34fb','00002a5f-0000-1000-8000-00805f9b34fb','00002a35-0000-1000-8000-00805f9b34fb'].includes(lowChar)) continue;
             if (!c.isNotifiable) continue;
-            // subscribe
-            subscribeIfNotifiable(svcUuid, lowChar, (characteristic) => {
+            // skip ones we already added
+            if (['00002a37-0000-1000-8000-00805f9b34fb','00002a19-0000-1000-8000-00805f9b34fb','00002a5f-0000-1000-8000-00805f9b34fb','00002a35-0000-1000-8000-00805f9b34fb'].includes(lowChar)) continue;
+
+            subscribeIfNotifiable(svcUuid, lowChar, (characteristic, svc, charU) => {
               if (!characteristic?.value) return;
-              const generic = parseGeneric(characteristic.value, svcUuid, lowChar);
-              if (generic) {
-                if ((generic as any).battery !== undefined) {
-                  // accept battery only from official battery char; else ignore
-                  if (svcUuid.includes('180f') || lowChar.includes('2a19')) maybeUpdateBattery((generic as any).battery, true);
-                } else {
-                  safeSetWatchData({ ...generic, lastUpdated: new Date() });
-                }
+              const parsed = parseGeneric(characteristic.value, svc, charU);
+              if (!parsed) return;
+
+              // map parsed outputs to stable updates
+              if ((parsed as any).heartRate !== undefined) updateStableMetric('heartRate', (parsed as any).heartRate, 2);
+              if ((parsed as any).oxygenSaturation !== undefined) updateStableMetric('oxygenSaturation', (parsed as any).oxygenSaturation, 2);
+              if ((parsed as any).bloodPressure !== undefined) updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
+              if ((parsed as any).steps !== undefined) {
+                const s = (parsed as any).steps;
+                // require steps plausibility (>0 & < 100 million) and change threshold
+                if (typeof s === 'number' && s >= 0 && s < 1e8) updateStableMetric('steps', s, 2);
               }
+              if ((parsed as any).calories !== undefined) updateStableMetric('calories', (parsed as any).calories, 2);
+              if ((parsed as any).battery !== undefined) maybeUpdateBatteryLocal((parsed as any).battery, false);
             });
           }
         }
-      } catch (e) {
-        console.warn('Vendor monitors enumeration non-fatal', e);
-      }
+      } catch (e) { console.warn('Vendor monitors enumeration non-fatal', e); }
 
       return true;
     } catch (error) {
@@ -451,17 +581,9 @@ export const useBLEWatch = () => {
       return false;
     }
 
-    // local helper inside connect for battery mayUpdate
-    function maybeUpdateBattery(newLevel: number, fromBatteryChar = false) {
-      const prev = batteryRef.current;
-      if (typeof prev === 'number') {
-        if (fromBatteryChar) { safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() }); return; }
-        const diff = Math.abs(prev - newLevel);
-        if (newLevel >= 20 || diff <= 20) safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
-        else console.log('[BLE] Ignored implausible battery jump', { prev, newLevel, diff, fromBatteryChar });
-      } else {
-        if (newLevel >= 0 && newLevel <= 100) safeSetWatchData({ battery: clamp(newLevel, 0, 100), lastUpdated: new Date() });
-      }
+    function maybeUpdateBatteryLocal(newLevel: number, fromBatteryChar = false) {
+      if (fromBatteryChar) updateStableMetric('battery', clamp(newLevel, 0, 100), 1);
+      else updateStableMetric('battery', clamp(newLevel, 0, 100), 2);
     }
   }, [logDeviceInfo, stopScan]);
 
@@ -499,7 +621,7 @@ export const useBLEWatch = () => {
         try {
           setIsSyncing(true);
           setSyncError(null);
-          const has = watchData.heartRate !== undefined || watchData.oxygenSaturation !== undefined || watchData.bloodPressure !== undefined || watchData.steps !== undefined || watchData.battery !== undefined;
+          const has = watchData.heartRate !== undefined || watchData.oxygenSaturation !== undefined || watchData.bloodPressure !== undefined || watchData.steps !== undefined || watchData.battery !== undefined || watchData.calories !== undefined;
           if (!has) return;
           const res = await syncToSupabase();
           if (res.success) setLastSync(new Date()); else setSyncError(res.error ?? 'Sync failed');
@@ -571,7 +693,7 @@ export const useBLEWatch = () => {
         if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
         const dev = connectedDeviceRef.current;
         const batt = await dev.readCharacteristicForService('180F', '2A19').catch(() => null);
-        if (batt?.value) { const lvl = Buffer.from(batt.value, 'base64').readUInt8(0); if (lvl >= 0 && lvl <= 100) safeSetWatchData({ battery: lvl, lastUpdated: new Date() }); }
+        if (batt?.value) { const lvl = Buffer.from(batt.value, 'base64').readUInt8(0); if (lvl >= 0 && lvl <= 100) updateStableMetric('battery', lvl, 1); }
         return { success: true };
       } catch (e: any) { return { success: false, error: e?.message ?? String(e) }; }
     },
