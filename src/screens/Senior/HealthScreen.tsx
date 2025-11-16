@@ -77,7 +77,6 @@ const HealthScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'activity' | 'sleep' | 'settings'>('overview');
   const [showDeviceList, setShowDeviceList] = useState(false);
-  const { syncToSupabase } = useBLE();
   
   // Define available device types with display names and icons
   const deviceTypes = [
