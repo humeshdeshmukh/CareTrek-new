@@ -1,6 +1,5 @@
 // src/screens/Senior/HealthScreen.tsx
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
-import useBLE from '../../hooks/useBLE';
 import { supabase } from '../../lib/supabase';
 import {
   View,
@@ -93,7 +92,7 @@ const HealthScreen: React.FC = () => {
     isScanning = false,
     selectedDeviceType = 'generic',
     setSelectedDeviceType = () => {},
-    syncDeviceData = async () => {},
+    syncDeviceData = async () => ({}),
     disconnectDevice = () => {},
     isSyncing = false,
     lastSync = null,
@@ -101,6 +100,8 @@ const HealthScreen: React.FC = () => {
     startScan = () => {},
     stopScan = () => {},
     connectToDevice = () => {},
+    // Add syncToSupabase so HealthScreen can call server sync directly
+    syncToSupabase = async () => ({ success: false, error: 'Not implemented' }),
     webViewRef = { current: null },
     handleMessage = () => {},
     handleError = () => {},
@@ -312,24 +313,40 @@ const HealthScreen: React.FC = () => {
     return content;
   });
 
-  // Handle sync press
+  // Handle sync press: first refresh local device data, then attempt to push to Supabase
   const handleSyncPress = useCallback(async () => {
     try {
+      // Step 1: refresh local readable characteristics
+      let localResult: any = { success: true };
       if (typeof syncDeviceData === 'function') {
-        const result = await syncDeviceData();
-        if (result?.success) {
+        localResult = await syncDeviceData();
+      }
+
+      // Step 2: if connected, push to Supabase using syncToSupabase
+      if (watchData?.status === 'connected' && typeof syncToSupabase === 'function') {
+        const serverResult = await syncToSupabase();
+        if (serverResult?.success) {
           Alert.alert('Success', 'Data synced successfully!');
         } else {
-          Alert.alert('Error', result?.error || 'Failed to sync data');
+          Alert.alert('Sync Error', serverResult?.error || 'Failed to sync to server');
         }
-      } else {
-        Alert.alert('Error', 'Sync function not available');
+        return;
+      }
+
+      if (!watchData || watchData.status !== 'connected') {
+        Alert.alert('Not connected', 'Please connect a device before syncing.');
+        return;
+      }
+
+      if (!localResult?.success) {
+        Alert.alert('Error', localResult?.error || 'Failed to read local device data');
+        return;
       }
     } catch (error: any) {
       console.error('Sync error:', error);
       Alert.alert('Error', error?.message || 'An error occurred while syncing');
     }
-  }, [syncDeviceData]);
+  }, [syncDeviceData, syncToSupabase, watchData]);
 
   // Sync status renderer with sync button
   const renderSyncStatus = () => {
