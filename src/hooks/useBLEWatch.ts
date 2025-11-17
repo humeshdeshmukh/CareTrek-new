@@ -2,34 +2,18 @@
 // Defensive BLE hook with improved vendor parsing + stability filter
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { BleManager, Device, Characteristic, State as BleState } from 'react-native-ble-plx';
-import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
+import { Platform, PermissionsAndroid, Alert, Linking, AppState } from 'react-native';
+import { DeviceType, WatchData as WatchDataType } from '../types/ble';
 import { saveHealthMetrics } from '../services/healthDataService';
 import { supabase } from '../lib/supabase';
 import { Buffer } from 'buffer';
 
-type DeviceType = 'miband' | 'amazfit' | 'firebolt' | 'generic';
-
-interface WatchData {
-  status: 'connected' | 'disconnected' | 'connecting' | 'scanning' | 'error';
-  deviceName?: string;
-  deviceType?: DeviceType;
-  heartRate?: number;
-  steps?: number;
-  battery?: number;
-  oxygenSaturation?: number;
-  bloodPressure?: { systolic: number; diastolic: number } | null;
-  calories?: number;
-  lastUpdated?: Date;
-  firmwareVersion?: string;
-  hardwareVersion?: string;
-  rssi?: number | null;
-  [k: string]: any;
-}
+// Types are now imported from '../types/ble'
 
 type CharFlags = { uuid: string; isReadable?: boolean; isWritable?: boolean; isNotifiable?: boolean; };
 
 export const useBLEWatch = () => {
-  const [watchData, setWatchData] = useState<WatchData>({ status: 'disconnected' });
+  const [watchData, setWatchData] = useState<WatchDataType>({ status: 'disconnected' });
   const [devices, setDevices] = useState<Device[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [selectedDeviceType, setSelectedDeviceType] = useState<DeviceType>('generic');
@@ -46,9 +30,148 @@ export const useBLEWatch = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [hasLocationPermission, setHasLocationPermission] = useState<boolean | null>(null);
 
-  // stability filter: map metric -> {lastValue, stableCount}
-  const stableRef = useRef<Record<string, { last?: any; count: number }>>({});
+  // ---------- syncToSupabase implementation ----------
+  const syncToSupabase = useCallback(async (data: WatchDataType) => {
+    if (isSyncing) return false;
+
+    setIsSyncing(true);
+    setSyncError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) throw new Error('User not authenticated');
+
+      // Ensure we have all required fields for the health metrics
+      const metricData: WatchDataType = {
+        ...data,
+        deviceId: data.deviceId || 'unknown',
+        deviceType: data.deviceType || 'generic',
+        lastUpdated: data.lastUpdated || new Date(),
+        timestamp: new Date().toISOString()
+      };
+
+      await saveHealthMetrics(session.user.id, metricData);
+      setLastSync(new Date());
+      return true;
+    } catch (error) {
+      console.error('Error syncing to Supabase:', error);
+      setSyncError(error instanceof Error ? error.message : 'Failed to sync data');
+      return false;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing]);
+
+  // Check and request location permissions (required for BLE scanning on Android)
+  const requestLocationPermission = useCallback(async (forceRequest = false) => {
+    if (Platform.OS !== 'android') return true;
+
+    // If we already have permissions, return true
+    if (!forceRequest && hasLocationPermission === true) {
+      return true;
+    }
+
+    try {
+      // First check current permissions without requesting
+      const hasFineLocation = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+      const hasBluetoothScan = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
+      const hasBluetoothConnect = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+
+      const allGrantedStatus = hasFineLocation && hasBluetoothScan && hasBluetoothConnect;
+      
+      // If we already have all permissions, return true
+      if (allGrantedStatus) {
+        setHasLocationPermission(true);
+        return true;
+      }
+
+      // If we're not forcing the request, return current status
+      if (!forceRequest) {
+        return allGrantedStatus;
+      }
+
+      // For now, we'll skip the shouldShowRequestPermissionRationale check
+      // as it's causing issues with some React Native versions
+      // Instead, we'll just check if we have the permissions already
+      // and request them if we don't
+      const hasDeniedPermanently = false;
+
+      if (hasDeniedPermanently) {
+        Alert.alert(
+          'Permissions Required',
+          'You have previously denied some required permissions. Please enable them in app settings to continue.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        return false;
+      }
+
+      // Request permissions with proper typing
+      type AndroidPermission = (typeof PermissionsAndroid.PERMISSIONS)[keyof typeof PermissionsAndroid.PERMISSIONS];
+      const permissions: AndroidPermission[] = [
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      ];
+
+      // Filter out already granted permissions
+      const permissionsToRequest: AndroidPermission[] = [];
+      if (!hasFineLocation) permissionsToRequest.push(permissions[0]);
+      if (!hasBluetoothScan) permissionsToRequest.push(permissions[1]);
+      if (!hasBluetoothConnect) permissionsToRequest.push(permissions[2]);
+
+      if (permissionsToRequest.length === 0) return true;
+
+      const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest);
+
+      // Check if all requested permissions are granted
+      const allRequestedGranted = Object.values(granted).every(
+        status => status === PermissionsAndroid.RESULTS.GRANTED
+      );
+
+      setHasLocationPermission(allRequestedGranted);
+
+      if (!allRequestedGranted) {
+        // Only log the warning in development
+        if (__DEV__) {
+          console.warn('Not all permissions were granted:', granted);
+        }
+        
+        // Check if any permission was denied with 'never ask again'
+        const shouldShowSettings = granted && Object.entries(granted).some(([permission, status]) => {
+          return status === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
+        });
+
+        if (shouldShowSettings) {
+          Alert.alert(
+            'Permissions Required',
+            'You have selected "Don\'t ask again". Please enable the required permissions in app settings.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+            ]
+          );
+        } else {
+          Alert.alert(
+            'Permissions Required',
+            'CareTrek needs location and Bluetooth permissions to connect to your smartwatch.',
+            [
+              { text: 'OK', style: 'default' }
+            ]
+          );
+        }
+      }
+
+      return allRequestedGranted;
+    } catch (err) {
+      console.warn('Error checking/requesting permissions:', err);
+      return false;
+    }
+  }, [hasLocationPermission]);
 
   // ---------- small utilities ----------
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
@@ -62,12 +185,12 @@ export const useBLEWatch = () => {
     return printable / buf.length > 0.6;
   };
 
-  const safeSetWatchData = (updater: Partial<WatchData> | ((prev: WatchData) => WatchData)) => {
+  const safeSetWatchData = (updater: ((prev: WatchDataType) => Partial<WatchDataType>) | Partial<WatchDataType>) => {
     if (!isMounted.current) return;
     setWatchData(prev => {
-      const next = typeof updater === 'function' ? (updater as any)(prev) : { ...prev, ...updater };
-      if ((next as any).battery !== undefined) batteryRef.current = (next as any).battery;
-      return next;
+      const next = typeof updater === 'function' ? { ...prev, ...updater(prev) } : { ...prev, ...updater };
+      if (next.battery !== undefined) batteryRef.current = next.battery;
+      return next as WatchDataType;
     });
   };
 
@@ -98,6 +221,7 @@ export const useBLEWatch = () => {
   };
 
   // ---------- metrics stability helper ----------
+  const stableRef = useRef<Record<string, { last?: any; count: number }>>({});
   const updateStableMetric = (key: string, value: any, acceptAfter = 2) => {
     const entry = stableRef.current[key] || { last: undefined, count: 0 };
     if (entry.last === value) {
@@ -109,12 +233,34 @@ export const useBLEWatch = () => {
     stableRef.current[key] = entry;
     if (entry.count >= acceptAfter) {
       // commit to watchData
-      if (key === 'heartRate') safeSetWatchData({ heartRate: value, lastUpdated: new Date() });
-      else if (key === 'oxygenSaturation') safeSetWatchData({ oxygenSaturation: value, lastUpdated: new Date() });
-      else if (key === 'steps') safeSetWatchData({ steps: value, lastUpdated: new Date() });
-      else if (key === 'battery') safeSetWatchData({ battery: value, lastUpdated: new Date() });
-      else if (key === 'calories') safeSetWatchData({ calories: value, lastUpdated: new Date() });
-      else if (key === 'bloodPressure' && value && typeof value === 'object') safeSetWatchData({ bloodPressure: value, lastUpdated: new Date() });
+      const update: Partial<WatchDataType> = { lastUpdated: new Date() };
+
+      switch (key) {
+        case 'heartRate':
+          update.heartRate = value;
+          break;
+        case 'oxygenSaturation':
+          update.oxygenSaturation = value;
+          break;
+        case 'steps':
+          update.steps = value;
+          break;
+        case 'battery':
+          update.battery = value;
+          break;
+        case 'calories':
+          update.calories = value;
+          break;
+        case 'bloodPressure':
+          if (value && typeof value === 'object') {
+            update.bloodPressure = value;
+          }
+          break;
+      }
+
+      if (Object.keys(update).length > 1) { // More than just lastUpdated
+        safeSetWatchData(update);
+      }
     }
   };
 
@@ -355,10 +501,14 @@ export const useBLEWatch = () => {
       console.warn('logDeviceInfo error', e);
       return { serviceSet: new Set<string>(), charSet: new Set<string>(), svcToChars: new Map<string, CharFlags[]>() };
     }
-  }, []);
+  }, [isMounted]);
 
   // ---------- permissions ----------
   const checkLocationServices = useCallback(async (): Promise<boolean> => {
+    if (!isMounted.current) {
+      return false;
+    }
+
     if (Platform.OS === 'android') {
       try {
         const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
@@ -368,6 +518,11 @@ export const useBLEWatch = () => {
           buttonNegative: 'Cancel',
           buttonPositive: 'OK',
         });
+
+        if (!isMounted.current) {
+          return false;
+        }
+
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
           Alert.alert('Location Permission Required', 'Please grant Location permission to allow BLE scanning.', [
             { text: 'Cancel', style: 'cancel' },
@@ -382,7 +537,7 @@ export const useBLEWatch = () => {
       }
     }
     return true;
-  }, []);
+  }, [isMounted]);
 
   const stopScan = useCallback(() => {
     try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
@@ -392,14 +547,41 @@ export const useBLEWatch = () => {
     }
     if (isMounted.current) {
       setIsScanning(false);
-      safeSetWatchData(prev => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
+      safeSetWatchData((prev: WatchDataType) => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
     }
-  }, []);
+  }, [isMounted]);
 
-  // ---------- scanning ----------
   const startScan = useCallback(async () => {
-    const mgr = bleManagerRef.current;
-    if (!mgr) return;
+    if (!bleManagerRef.current || isScanning) return false;
+
+    // Check and request location permissions before scanning
+    if (Platform.OS === 'android') {
+      try {
+        // First check without requesting to avoid unnecessary dialogs
+        const hasPermission = await requestLocationPermission(false);
+        
+        if (!hasPermission) {
+          // Only show the permission request dialog if we don't have permissions
+          const permissionGranted = await requestLocationPermission(true);
+          
+          if (!permissionGranted) {
+            Alert.alert(
+              'Permissions Required',
+              'CareTrek needs location and Bluetooth permissions to scan for nearby devices. ' +
+              'Please enable the required permissions in app settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() }
+              ]
+            );
+            return false;
+          }
+        }
+      } catch (error) {
+        console.error('Error handling permissions:', error);
+        return false;
+      }
+    }
     if (isScanning) return;
 
     const ok = await checkLocationServices();
@@ -413,7 +595,7 @@ export const useBLEWatch = () => {
     safeSetWatchData({ status: 'scanning' });
 
     try {
-      mgr.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+      bleManagerRef.current?.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
         if (!isMounted.current) return;
         if (error) { handleMonitorError(error, 'Scan'); stopScan(); return; }
         if (device && device.id) {
@@ -423,10 +605,10 @@ export const useBLEWatch = () => {
 
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = setTimeout(() => {
-        try { mgr.stopDeviceScan(); } catch (_) {}
+        try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
         if (!isMounted.current) return;
         setIsScanning(false);
-        safeSetWatchData(prev => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
+        safeSetWatchData((prev: WatchDataType) => ({ ...prev, status: prev.status === 'connected' ? 'connected' : 'disconnected' }));
         scanTimeoutRef.current = null;
       }, 10000);
     } catch (err) {
@@ -436,7 +618,6 @@ export const useBLEWatch = () => {
     }
   }, [checkLocationServices, isScanning, stopScan]);
 
-  // ---------- connect & monitor (only notifiable chars) ----------
   const connectToDevice = useCallback(async (device: Device) => {
     const mgr = bleManagerRef.current;
     if (!mgr) return false;
@@ -456,7 +637,7 @@ export const useBLEWatch = () => {
       stopScan();
       safeSetWatchData({ status: 'connecting' });
 
-      const connected = await withRetry(() => device.connect(), 3, 400);
+      const connected = await withRetry<Device>(() => device.connect() as Promise<Device>, 3, 400);
       await connected.discoverAllServicesAndCharacteristics().catch(() => null);
       connectedDeviceRef.current = connected;
 
@@ -469,7 +650,12 @@ export const useBLEWatch = () => {
       else if (lower.includes('amazfit')) deviceType = 'amazfit';
       else if (lower.includes('firebolt')) deviceType = 'firebolt';
 
-      safeSetWatchData(prev => ({ ...prev, status: 'connected', deviceName, deviceType, lastUpdated: new Date() }));
+      safeSetWatchData((prev: WatchDataType) => ({
+        ...prev,
+        deviceName,
+        deviceType,
+        lastUpdated: new Date()
+      }));
 
       // read RSSI
       try {
@@ -497,7 +683,7 @@ export const useBLEWatch = () => {
       };
 
       // Helper: subscribe only if char is flagged notifiable
-      const subscribeIfNotifiable = (svcUuid: string, charUuid: string, handler: (char: Characteristic | null, svc?: string, char?: string) => void) => {
+      const subscribeIfNotifiable = (svcUuid: string, charUuid: string, handler: (char: Characteristic | null, svcId?: string, charId?: string) => void) => {
         try {
           const chars = svcToChars.get(svcUuid) || [];
           const found = chars.find(c => c.uuid === charUuid);
@@ -587,48 +773,65 @@ export const useBLEWatch = () => {
     }
   }, [logDeviceInfo, stopScan]);
 
-  // ---------- disconnect ----------
+  // Updated disconnectDevice to use syncToSupabase as requested
   const disconnectDevice = useCallback(async () => {
     try {
       stopScan();
       clearAllMonitors();
       try { if (connectedDeviceRef.current) await connectedDeviceRef.current.cancelConnection().catch(() => null); } catch (_) {}
       connectedDeviceRef.current = null;
-      safeSetWatchData({ status: 'disconnected' });
-      setDevices([]); setIsScanning(false);
-    } catch (e) { console.error('Disconnect error', e); }
-  }, [stopScan]);
 
-  // ---------- sync (outside callbacks) ----------
-  const syncToSupabase = useCallback(async () => {
-    if (watchData.status !== 'connected' || !watchData.deviceName) return { success: false, error: 'No device connected' };
-    try {
-      const { data: { user }, error: authErr } = await supabase.auth.getUser();
-      if (authErr) throw authErr;
-      if (!user) throw new Error('Not authenticated');
-      const res = await saveHealthMetrics(user.id, watchData);
-      return { success: true, data: res };
-    } catch (e: any) {
-      console.error('syncToSupabase failed', e);
-      return { success: false, error: e?.message ?? String(e) };
+      // Get current session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) {
+        console.warn('User not authenticated during disconnect');
+        return;
+      }
+
+      // Sync the latest watch data before disconnecting
+      if (watchData.status === 'connected') {
+        await syncToSupabase({
+          ...watchData,
+          deviceId: watchData.deviceId || 'unknown',
+          deviceType: watchData.deviceType || 'generic',
+          lastUpdated: new Date()
+        });
+      }
+
+      setLastSync(new Date());
+    } catch (error) {
+      console.error('Error during disconnect:', error);
+      setSyncError(error instanceof Error ? error.message : 'Failed to sync data');
+    } finally {
+      setIsSyncing(false);
+      safeSetWatchData(prev => ({ ...prev, status: 'disconnected' }));
     }
-  }, [watchData]);
+  }, [isSyncing, stopScan, watchData, syncToSupabase, clearAllMonitors]);
 
-  // Auto-sync (debounced)
+  // Auto-sync effect
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (watchData.status === 'connected' && watchData.deviceName && watchData.lastUpdated) {
         try {
           setIsSyncing(true);
           setSyncError(null);
-          const has = watchData.heartRate !== undefined || watchData.oxygenSaturation !== undefined || watchData.bloodPressure !== undefined || watchData.steps !== undefined || watchData.battery !== undefined || watchData.calories !== undefined;
+          const has = watchData.heartRate !== undefined ||
+                     watchData.oxygenSaturation !== undefined ||
+                     watchData.bloodPressure !== undefined ||
+                     watchData.steps !== undefined ||
+                     watchData.battery !== undefined ||
+                     watchData.calories !== undefined;
+
           if (!has) return;
-          const res = await syncToSupabase();
-          if (res.success) setLastSync(new Date()); else setSyncError(res.error ?? 'Sync failed');
+
+          await syncToSupabase(watchData);
+          setLastSync(new Date());
         } catch (e) {
           console.error('Auto-sync error', e);
           setSyncError(e instanceof Error ? e.message : 'Unknown');
-        } finally { setIsSyncing(false); }
+        } finally {
+          setIsSyncing(false);
+        }
       }
     }, 900);
     return () => clearTimeout(timer);
@@ -666,7 +869,7 @@ export const useBLEWatch = () => {
       if (stateSub?.remove) try { stateSub.remove(); } catch (_) {}
       bleManagerRef.current = null;
     };
-  }, []);
+  }, [isMounted]);
 
   // defensive cleanup
   useEffect(() => {
@@ -674,7 +877,7 @@ export const useBLEWatch = () => {
       clearAllMonitors();
       try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
     };
-  }, []);
+  }, [isMounted]);
 
   // ---------- exports ----------
   return {

@@ -1,6 +1,6 @@
 // src/services/healthDataService.ts
 import { supabase } from '../lib/supabase';
-import { WatchData } from '../hooks/useBLEWatch';
+import type { WatchData } from '../types/ble';
 
 // Define the health metrics table name
 const HEALTH_METRICS_TABLE = 'health_metrics';
@@ -30,6 +30,7 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
       throw new Error('User ID and device name are required');
     }
 
+    const now = new Date().toISOString();
     const metric: Omit<HealthMetric, 'id' | 'created_at'> = {
       user_id: userId,
       device_id: deviceData.deviceId || 'unknown',
@@ -42,7 +43,7 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
       blood_pressure_systolic: deviceData.bloodPressure?.systolic,
       blood_pressure_diastolic: deviceData.bloodPressure?.diastolic,
       calories: deviceData.calories,
-      timestamp: new Date().toISOString(),
+      timestamp: deviceData.lastUpdated ? new Date(deviceData.lastUpdated).toISOString() : now,
     };
 
     const { data, error } = await supabase
