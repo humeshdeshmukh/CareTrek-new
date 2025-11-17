@@ -9,7 +9,6 @@ import { supabase } from '../lib/supabase';
 import { Buffer } from 'buffer';
 
 // Types are now imported from '../types/ble'
-
 type CharFlags = { uuid: string; isReadable?: boolean; isWritable?: boolean; isNotifiable?: boolean; };
 
 export const useBLEWatch = () => {
@@ -64,114 +63,153 @@ export const useBLEWatch = () => {
     }
   }, [isSyncing]);
 
-  // Check and request location permissions (required for BLE scanning on Android)
+  // ---------- permission helpers (robust) ----------
+  // Helper to decide if running on Android 12+ where BLUETOOTH_SCAN/CONNECT are required
+  const isAndroid12Plus = () => {
+    try {
+      // Platform.Version sometimes returns string; ensure number compare
+      return Platform.OS === 'android' && Number(Platform.Version) >= 31;
+    } catch {
+      return false;
+    }
+  };
+
+  // Return list of runtime permissions we should request on this platform/version
+  const getRequiredAndroidPermissions = (): Array<(typeof PermissionsAndroid.PERMISSIONS)[keyof typeof PermissionsAndroid.PERMISSIONS]> => {
+    if (isAndroid12Plus()) {
+      // Android 12+ requires BLUETOOTH_SCAN and BLUETOOTH_CONNECT; location still sometimes required by OEMs
+      return [
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      ];
+    }
+    // older Android: location is the main required for BLE scan
+    return [
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+    ];
+  };
+
+  // robust single-run permission requester with NEVER_ASK_AGAIN handling and AppState re-check
   const requestLocationPermission = useCallback(async (forceRequest = false) => {
     if (Platform.OS !== 'android') return true;
 
-    // If we already have permissions, return true
-    if (!forceRequest && hasLocationPermission === true) {
-      return true;
-    }
+    // If we already checked and it's true and not forcing, return
+    if (!forceRequest && hasLocationPermission === true) return true;
 
     try {
-      // First check current permissions without requesting
-      const hasFineLocation = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-      const hasBluetoothScan = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
-      const hasBluetoothConnect = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+      const required = getRequiredAndroidPermissions();
 
-      const allGrantedStatus = hasFineLocation && hasBluetoothScan && hasBluetoothConnect;
-      
-      // If we already have all permissions, return true
-      if (allGrantedStatus) {
+      // First, do a silent check for each required permission
+      const currentStatus: Record<string, boolean> = {};
+      for (const p of required) {
+        try {
+          currentStatus[p] = await PermissionsAndroid.check(p as any);
+        } catch {
+          currentStatus[p] = false;
+        }
+      }
+
+      const allAlreadyGranted = Object.values(currentStatus).every(Boolean);
+      if (allAlreadyGranted) {
         setHasLocationPermission(true);
         return true;
       }
 
-      // If we're not forcing the request, return current status
+      // If not forcing, return current combined value (silent)
       if (!forceRequest) {
-        return allGrantedStatus;
-      }
-
-      // For now, we'll skip the shouldShowRequestPermissionRationale check
-      // as it's causing issues with some React Native versions
-      // Instead, we'll just check if we have the permissions already
-      // and request them if we don't
-      const hasDeniedPermanently = false;
-
-      if (hasDeniedPermanently) {
-        Alert.alert(
-          'Permissions Required',
-          'You have previously denied some required permissions. Please enable them in app settings to continue.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() }
-          ]
-        );
+        setHasLocationPermission(false);
         return false;
       }
 
-      // Request permissions with proper typing
-      type AndroidPermission = (typeof PermissionsAndroid.PERMISSIONS)[keyof typeof PermissionsAndroid.PERMISSIONS];
-      const permissions: AndroidPermission[] = [
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      ];
+      // Build list to request (exclude ones already granted)
+      const toRequest = required.filter(r => !currentStatus[r]);
 
-      // Filter out already granted permissions
-      const permissionsToRequest: AndroidPermission[] = [];
-      if (!hasFineLocation) permissionsToRequest.push(permissions[0]);
-      if (!hasBluetoothScan) permissionsToRequest.push(permissions[1]);
-      if (!hasBluetoothConnect) permissionsToRequest.push(permissions[2]);
+      // If nothing to request (defensive), return false
+      if (toRequest.length === 0) {
+        setHasLocationPermission(false);
+        return false;
+      }
 
-      if (permissionsToRequest.length === 0) return true;
+      // Request multiple
+      const granted = await PermissionsAndroid.requestMultiple(toRequest as any);
 
-      const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest);
-
-      // Check if all requested permissions are granted
-      const allRequestedGranted = Object.values(granted).every(
-        status => status === PermissionsAndroid.RESULTS.GRANTED
-      );
-
-      setHasLocationPermission(allRequestedGranted);
-
-      if (!allRequestedGranted) {
-        // Only log the warning in development
-        if (__DEV__) {
-          console.warn('Not all permissions were granted:', granted);
+      // Evaluate results
+      let allGranted = true;
+      let anyNeverAskAgain = false;
+      for (const perm of toRequest) {
+        const status = granted[perm];
+        if (status !== PermissionsAndroid.RESULTS.GRANTED) {
+          allGranted = false;
+          if (status === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) anyNeverAskAgain = true;
         }
-        
-        // Check if any permission was denied with 'never ask again'
-        const shouldShowSettings = granted && Object.entries(granted).some(([permission, status]) => {
-          return status === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
-        });
+      }
 
-        if (shouldShowSettings) {
+      setHasLocationPermission(allGranted);
+
+      if (!allGranted) {
+        // If user selected "Don't ask again" on any - prompt to open settings
+        if (anyNeverAskAgain) {
           Alert.alert(
             'Permissions Required',
-            'You have selected "Don\'t ask again". Please enable the required permissions in app settings.',
+            'Some required permissions were permanently denied. Please enable them in app settings to continue.',
             [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+              {
+                text: 'Open Settings',
+                onPress: async () => {
+                  try {
+                    await Linking.openSettings();
+                  } catch {
+                    // fallback: provide instructions
+                    Alert.alert('Open Settings', 'Please open app settings and enable Location and Bluetooth permissions.');
+                  }
+                }
+              }
             ]
           );
         } else {
+          // Show rationale / explanation
           Alert.alert(
             'Permissions Required',
-            'CareTrek needs location and Bluetooth permissions to connect to your smartwatch.',
-            [
-              { text: 'OK', style: 'default' }
-            ]
+            'CareTrek needs location and Bluetooth permissions to connect to your smartwatch. Please allow them when prompted.',
+            [{ text: 'OK', style: 'default' }]
           );
         }
       }
 
-      return allRequestedGranted;
+      return allGranted;
     } catch (err) {
       console.warn('Error checking/requesting permissions:', err);
+      setHasLocationPermission(false);
       return false;
     }
   }, [hasLocationPermission]);
+
+  // Additional check wrapper called by scan flow; if user returns from settings we re-check
+  const checkLocationServices = useCallback(async (): Promise<boolean> => {
+    if (!isMounted.current) return false;
+    if (Platform.OS !== 'android') return true;
+
+    // quick silent check
+    const silentOk = await requestLocationPermission(false);
+    if (silentOk) return true;
+
+    // otherwise actively request
+    const requested = await requestLocationPermission(true);
+    if (!requested) {
+      // show friendly dialog guiding to settings (avoid spamming)
+      Alert.alert(
+        'Permissions Required',
+        'CareTrek needs location and Bluetooth permissions to scan for nearby devices.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ]
+      );
+    }
+    return requested;
+  }, [requestLocationPermission]);
 
   // ---------- small utilities ----------
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
@@ -314,7 +352,6 @@ export const useBLEWatch = () => {
     } catch { return undefined; }
   };
 
-  // Try multiple interpretations for BP: uint16 LE/BE pairs at offsets 0 and 2
   const parseBloodPressure = (b64: string): { systolic: number; diastolic: number } | undefined => {
     try {
       const buf = Buffer.from(b64, 'base64');
@@ -323,7 +360,6 @@ export const useBLEWatch = () => {
 
       const candidates: Array<{ sys: number; dia: number }> = [];
 
-      // If at least 4 bytes, try (0..1) and (2..3) as LE/BE
       if (buf.length >= 4) {
         const sLE = buf.readUInt16LE(0);
         const dLE = buf.readUInt16LE(2);
@@ -334,16 +370,13 @@ export const useBLEWatch = () => {
         candidates.push({ sys: sBE, dia: dBE });
       }
 
-      // If 2 bytes only, try interpret as systolic and estimate diastolic (some devices encode compressed)
       if (buf.length === 2) {
         const valLE = buf.readUInt16LE(0);
         const valBE = buf.readUInt16BE(0);
-        // treat as systolic, set diastolic = systolic - typical delta if plausible
         if (valLE >= 70 && valLE <= 260) candidates.push({ sys: valLE, dia: Math.max(40, valLE - 40) });
         if (valBE >= 70 && valBE <= 260) candidates.push({ sys: valBE, dia: Math.max(40, valBE - 40) });
       }
 
-      // Evaluate candidates and pick the first plausible one
       for (const c of candidates) {
         const { sys, dia } = c;
         if (Number.isFinite(sys) && Number.isFinite(dia) && sys >= 70 && sys <= 260 && dia >= 40 && dia <= 200 && sys > dia) {
@@ -351,7 +384,6 @@ export const useBLEWatch = () => {
         }
       }
 
-      // As last resort, scan buffer bytes for two plausible bytes (rare)
       for (let i = 0; i + 1 < buf.length; i++) {
         const a = buf.readUInt8(i), b = buf.readUInt8(i + 1);
         if (a >= 70 && a <= 260 && b >= 40 && b <= 200 && a > b) return { systolic: a, diastolic: b };
@@ -366,7 +398,6 @@ export const useBLEWatch = () => {
       const buf = Buffer.from(b64, 'base64');
       if (!buf || buf.length === 0) return undefined;
       if (isPrintableText(buf)) return undefined;
-      // try 2/3/4 byte little-endian int
       if (buf.length >= 2) {
         try {
           const v2 = buf.readUInt16LE(0);
@@ -385,7 +416,6 @@ export const useBLEWatch = () => {
           if (v4 > 0 && v4 < 200000) return v4;
         } catch {}
       }
-      // scan bytes for plausible calories (e.g., 10..20000)
       for (let i = 0; i < buf.length; i++) {
         const v = buf.readUInt8(i);
         if (v > 10 && v < 20000) return v;
@@ -394,30 +424,24 @@ export const useBLEWatch = () => {
     } catch { return undefined; }
   };
 
-  // Generic heuristics: try to extract HR/SPo2/BP/steps/calories from vendor notifications
   const parseGeneric = (b64: string, svc?: string, char?: string) => {
     try {
       const buf = Buffer.from(b64, 'base64');
       if (!buf || buf.length === 0) return null;
       if (isPrintableText(buf)) return null;
 
-      // 1) Heart rate: single or found anywhere
       const hr = parseHeartRate(b64);
       if (typeof hr === 'number') return { heartRate: hr };
 
-      // 2) SpO2:
       const spo2 = parseSpO2(b64);
       if (typeof spo2 === 'number') return { oxygenSaturation: spo2 };
 
-      // 3) BP:
       const bp = parseBloodPressure(b64);
       if (bp) return { bloodPressure: bp };
 
-      // 4) calories:
       const cal = parseCalories(b64);
       if (typeof cal === 'number' && cal > 0 && cal < 200000) return { calories: cal };
 
-      // 5) steps (32-bit LE but require > 100 and plausibility)
       if (buf.length >= 4) {
         try {
           const steps = buf.readUInt32LE(0);
@@ -425,7 +449,6 @@ export const useBLEWatch = () => {
         } catch {}
       }
 
-      // 6) single-byte ambiguous: if service isn't battery and value within HR range -> HR
       if (buf.length === 1) {
         const v = buf.readUInt8(0);
         const s = (svc || '').toLowerCase();
@@ -435,7 +458,6 @@ export const useBLEWatch = () => {
           if (v >= 30 && v <= 220) return { heartRate: v };
           if (v >= 50 && v <= 100) return { oxygenSaturation: v };
         } else {
-          // official battery
           if (v >= 0 && v <= 100) return { battery: v };
         }
       }
@@ -503,41 +525,25 @@ export const useBLEWatch = () => {
     }
   }, [isMounted]);
 
-  // ---------- permissions ----------
-  const checkLocationServices = useCallback(async (): Promise<boolean> => {
-    if (!isMounted.current) {
-      return false;
-    }
-
-    if (Platform.OS === 'android') {
+  // ---------- permissions + AppState re-check ----------
+  useEffect(() => {
+    // When the app comes back to foreground, re-check Android permissions — useful after user opened Settings
+    const onAppStateChange = (next: string) => {
       try {
-        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
-          title: 'Location Permission',
-          message: 'Bluetooth Low Energy requires Location permission to scan for nearby devices',
-          buttonNeutral: 'Ask Me Later',
-          buttonNegative: 'Cancel',
-          buttonPositive: 'OK',
-        });
-
-        if (!isMounted.current) {
-          return false;
+        if (next === 'active' && Platform.OS === 'android') {
+          // re-check silently
+          requestLocationPermission(false).catch(() => {});
         }
+      } catch {}
+    };
 
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert('Location Permission Required', 'Please grant Location permission to allow BLE scanning.', [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
-          ]);
-          return false;
-        }
-        return true;
-      } catch (error) {
-        console.error('Error checking location services:', error);
-        return false;
-      }
-    }
-    return true;
-  }, [isMounted]);
+    const subscription = AppState.addEventListener ? AppState.addEventListener('change', onAppStateChange) : null;
+    return () => {
+      try { subscription?.remove?.(); } catch (_) {}
+    };
+  }, [requestLocationPermission]);
+
+  // ---------- scan/connection/monitoring ----------
 
   const stopScan = useCallback(() => {
     try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
@@ -553,35 +559,6 @@ export const useBLEWatch = () => {
 
   const startScan = useCallback(async () => {
     if (!bleManagerRef.current || isScanning) return false;
-
-    // Check and request location permissions before scanning
-    if (Platform.OS === 'android') {
-      try {
-        // First check without requesting to avoid unnecessary dialogs
-        const hasPermission = await requestLocationPermission(false);
-        
-        if (!hasPermission) {
-          // Only show the permission request dialog if we don't have permissions
-          const permissionGranted = await requestLocationPermission(true);
-          
-          if (!permissionGranted) {
-            Alert.alert(
-              'Permissions Required',
-              'CareTrek needs location and Bluetooth permissions to scan for nearby devices. ' +
-              'Please enable the required permissions in app settings.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Open Settings', onPress: () => Linking.openSettings() }
-              ]
-            );
-            return false;
-          }
-        }
-      } catch (error) {
-        console.error('Error handling permissions:', error);
-        return false;
-      }
-    }
     if (isScanning) return;
 
     const ok = await checkLocationServices();
@@ -750,7 +727,6 @@ export const useBLEWatch = () => {
               if ((parsed as any).bloodPressure !== undefined) updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
               if ((parsed as any).steps !== undefined) {
                 const s = (parsed as any).steps;
-                // require steps plausibility (>0 & < 100 million) and change threshold
                 if (typeof s === 'number' && s >= 0 && s < 1e8) updateStableMetric('steps', s, 2);
               }
               if ((parsed as any).calories !== undefined) updateStableMetric('calories', (parsed as any).calories, 2);
