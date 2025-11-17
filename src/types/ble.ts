@@ -16,6 +16,21 @@ export interface WatchData {
     diastolic: number;
   } | null;
   calories?: number;
+  // New fields for sleep and hydration
+  sleepData?: {
+    duration: number; // in minutes
+    quality: 'poor' | 'fair' | 'good' | 'excellent'; // sleep quality
+    deepSleep: number; // in minutes
+    lightSleep: number; // in minutes
+    remSleep: number; // in minutes
+    awakeTime: number; // in minutes
+    timestamp: Date;
+  } | null;
+  hydration?: {
+    waterIntake: number; // in ml
+    goal: number; // daily goal in ml
+    timestamp: Date;
+  } | null;
   lastUpdated?: Date;
   firmwareVersion?: string;
   hardwareVersion?: string;

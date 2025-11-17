@@ -658,7 +658,7 @@ export const useBLEWatch = () => {
     }
   }, [checkLocationServices, isScanning, stopScan]);
 
-  const connectToDevice = useCallback(async (device: Device) => {
+  const connectToDevice = useCallback(async (device: Device | any) => {
     const mgr = bleManagerRef.current;
     if (!mgr) return false;
 
@@ -680,8 +680,27 @@ export const useBLEWatch = () => {
 
       console.log('[BLE] Connecting to device:', device.name || device.id);
       
+      // Get a fresh device object from the manager to ensure it has the connect method
+      let deviceToConnect = device;
+      if (!device.connect || typeof device.connect !== 'function') {
+        console.log('[BLE] Device object missing connect method, retrieving from manager');
+        try {
+          deviceToConnect = await mgr.connectedDevices([]);
+          const found = deviceToConnect.find((d: any) => d.id === device.id);
+          if (found) {
+            deviceToConnect = found;
+          } else {
+            // If not in connected list, try to get it from the manager
+            deviceToConnect = device; // Fall back to original
+          }
+        } catch (e) {
+          console.warn('[BLE] Could not retrieve device from manager:', e);
+          deviceToConnect = device;
+        }
+      }
+      
       // Add timeout to connection attempt (10 seconds max)
-      const connectPromise = withRetry<Device>(() => device.connect() as Promise<Device>, 3, 400);
+      const connectPromise = withRetry<Device>(() => deviceToConnect.connect() as Promise<Device>, 3, 400);
       const connectWithTimeout = Promise.race([
         connectPromise,
         new Promise<Device>((_, reject) => 

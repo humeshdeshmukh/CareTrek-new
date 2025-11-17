@@ -41,6 +41,14 @@ export interface HealthMetric {
   blood_pressure_systolic?: number;
   blood_pressure_diastolic?: number;
   calories?: number;
+  sleep_duration?: number;
+  sleep_quality?: string;
+  deep_sleep?: number;
+  light_sleep?: number;
+  rem_sleep?: number;
+  awake_time?: number;
+  water_intake?: number;
+  hydration_goal?: number;
   timestamp: string;
   created_at?: string;
 }

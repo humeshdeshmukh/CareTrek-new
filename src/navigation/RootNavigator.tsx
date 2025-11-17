@@ -24,6 +24,15 @@ import RemindersScreen from '../screens/Senior/RemindersScreen';
 import IdShareScreen from '../screens/Senior/IdShareScreen';
 import SOSContactsScreen from '../screens/Senior/SOSContactsScreen';
 
+// Import health metric detail screens
+import HeartRateScreen from '../screens/Senior/HealthMetrics/HeartRateScreen';
+import StepsScreen from '../screens/Senior/HealthMetrics/StepsScreen';
+import OxygenScreen from '../screens/Senior/HealthMetrics/OxygenScreen';
+import BloodPressureScreen from '../screens/Senior/HealthMetrics/BloodPressureScreen';
+import CaloriesScreen from '../screens/Senior/HealthMetrics/CaloriesScreen';
+import SleepScreen from '../screens/Senior/HealthMetrics/SleepScreen';
+import HydrationScreen from '../screens/Senior/HealthMetrics/HydrationScreen';
+
 // Import family screens
 import HomeScreenFamily from '../screens/family/HomeScreenFamily';
 import AddSeniorScreen from '../screens/family/AddSeniorScreen';
@@ -102,6 +111,15 @@ export type RootStackParamList = {
   Appointments: undefined;
   Map: undefined;
   HomeLocation: undefined;
+
+  // Health Metric Detail Screens
+  HeartRate: undefined;
+  Steps: undefined;
+  Oxygen: undefined;
+  BloodPressure: undefined;
+  Calories: undefined;
+  Sleep: undefined;
+  Hydration: undefined;
 };
 
 // Import AuthStackParamList from types
@@ -285,7 +303,67 @@ const RootNavigator = () => {
         />
         
         {/* SOSContacts Screen */}
-        <Stack.Screen name="SOSContacts" component={SOSContactsScreen} />
+        <Stack.Screen 
+        name="SOSContacts" 
+        component={SOSContactsScreen} 
+      />
+
+      {/* Health Metric Detail Screens */}
+      <Stack.Screen
+        name="HeartRate"
+        component={HeartRateScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Steps"
+        component={StepsScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Oxygen"
+        component={OxygenScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="BloodPressure"
+        component={BloodPressureScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Calories"
+        component={CaloriesScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Sleep"
+        component={SleepScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Hydration"
+        component={HydrationScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
       
       {/* Senior Tabs Navigator */}
       <Stack.Screen 
