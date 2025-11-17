@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
-import { BleManager, Device } from 'react-native-ble-plx';
-import { Platform, PermissionsAndroid, Linking, Alert } from 'react-native';
+// src/hooks/useBLE.ts
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { BleManager, Device, Characteristic, State as BleState } from 'react-native-ble-plx';
+import { Platform, PermissionsAndroid, Linking, Alert, type Permission } from 'react-native';
+import { Buffer } from 'buffer';
 
 type DeviceType = 'miband' | 'amazfit' | 'firebolt' | 'generic';
 
@@ -28,67 +30,46 @@ const useBLE = () => {
     deviceType: null,
   });
 
-  const bleManager = new BleManager();
+  // BleManager stable across renders
+  const bleManagerRef = useRef<BleManager | null>(null);
+  if (!bleManagerRef.current) bleManagerRef.current = new BleManager();
+  const bleManager = bleManagerRef.current;
+
+  // Keep a timeout ref to auto-stop scanning
+  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Handle BLE state changes
   useEffect(() => {
-    const subscription = bleManager.onStateChange((state) => {
-      if (state === 'PoweredOff') {
-        setState(prev => ({
-          ...prev,
-          error: 'Bluetooth is turned off. Please enable Bluetooth to continue.'
-        }));
-      }
-    }, true);
+    let subscription: any = null;
+    try {
+      subscription = bleManager.onStateChange((s: BleState | string) => {
+        const st = String(s).toLowerCase();
+        if (st === 'poweredoff' || s === BleState.PoweredOff) {
+          setState(prev => ({
+            ...prev,
+            error: 'Bluetooth is turned off. Please enable Bluetooth to continue.',
+          }));
+        }
+      }, true);
+    } catch (err) {
+      console.warn('onStateChange subscribe failed', err);
+    }
 
     return () => {
-      subscription.remove();
+      try {
+        if (!subscription) return;
+        if (typeof subscription.remove === 'function') subscription.remove();
+        else if (typeof subscription === 'function') subscription();
+      } catch (_) {}
     };
+    // bleManager is ref-stable; no deps
   }, []);
 
-  // Check if location services are enabled (simplified version)
-  const checkLocationServices = useCallback(async () => {
-    if (Platform.OS === 'android') {
-      return await requestLocationPermission();
-    }
-    return true; // For iOS, we'll rely on the system to handle permissions
-  }, []);
-
-  // Open device settings
-  const openSettings = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      Linking.openURL('app-settings:');
-    } else {
-      Linking.openSettings();
-    }
-  }, []);
-
-  // Show location services alert
-  const showLocationServicesAlert = useCallback(() => {
-    Alert.alert(
-      'Location Services Required',
-      'Bluetooth Low Energy scanning requires location services to be enabled. Please enable location services in your device settings.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Open Settings', 
-          onPress: () => {
-            if (Platform.OS === 'ios') {
-              Linking.openURL('app-settings:');
-            } else {
-              Linking.openSettings();
-            }
-          }
-        }
-      ]
-    );
-  }, []);
-
-  // Request location permission (required for BLE on Android)
-  const requestLocationPermission = async (): Promise<boolean> => {
+  // Request and check location permission (Android)
+  const requestLocationPermission = useCallback(async (): Promise<boolean> => {
     if (Platform.OS !== 'android') return true;
-    
     try {
+      // Only request location permissions - BLUETOOTH_SCAN/CONNECT cause native errors
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         {
@@ -97,233 +78,328 @@ const useBLE = () => {
           buttonNeutral: 'Ask Me Later',
           buttonNegative: 'Cancel',
           buttonPositive: 'OK',
-        },
+        }
       );
-      
       return granted === PermissionsAndroid.RESULTS.GRANTED;
     } catch (err) {
       console.warn('Error requesting location permission:', err);
-      return false;
+      // On error, return true to allow scanning anyway
+      return true;
     }
-  };
+  }, []);
 
-  // Stop BLE scanning
+  // Check location permission & hint user if not
+  const checkLocationServices = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const hasPermission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+      if (!hasPermission) {
+        const granted = await requestLocationPermission();
+        if (!granted) {
+          Alert.alert(
+            'Location Services Required',
+            'Bluetooth Low Energy scanning requires location access. Please enable location permissions.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Open Settings',
+                onPress: () => {
+                  if (Platform.OS === 'ios') Linking.openURL('app-settings:');
+                  else Linking.openSettings();
+                },
+              },
+            ]
+          );
+          return false;
+        }
+      }
+      return true;
+    } catch (err) {
+      console.warn('Error checking location services', err);
+      // On error, return true to allow scanning anyway
+      return true;
+    }
+  }, [requestLocationPermission]);
+
+  // Graceful stopScan that clears timeout and updates state
   const stopScan = useCallback(() => {
     try {
       bleManager.stopDeviceScan();
-      setState(prev => ({ ...prev, isScanning: false }));
     } catch (error) {
-      console.error('Error stopping scan:', error);
+      console.warn('stopDeviceScan error', error);
+    } finally {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+        scanTimeoutRef.current = null;
+      }
+      setState(prev => ({ ...prev, isScanning: false }));
     }
+  }, [bleManager]);
+
+  // Helper to show the "enable location services" alert
+  const showLocationServicesAlert = useCallback(() => {
+    Alert.alert(
+      'Location Services Required',
+      'Location services are disabled. Enable them in device settings to scan for BLE devices.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open Settings',
+          onPress: () => {
+            if (Platform.OS === 'ios') Linking.openURL('app-settings:');
+            else Linking.openSettings();
+          },
+        },
+      ]
+    );
   }, []);
 
-  // Scan for BLE devices
+  // Start scanning with stronger handling for "Location services disabled" errors
   const startScan = useCallback(async () => {
+    // Clear previous errors
+    setState(prev => ({ ...prev, error: null }));
+    
+    // Request permissions in background (non-blocking)
+    checkLocationServices().catch(() => {});
+
+    // Ensure Bluetooth powered on (best-effort)
     try {
-      setState(prev => ({ ...prev, isScanning: true, error: null }));
-      
-      // Request location permission on Android
-      if (Platform.OS === 'android') {
-        const granted = await requestLocationPermission();
-        if (!granted) {
-          showLocationServicesAlert();
-          throw new Error('Location permission is required for BLE scanning');
-        }
+      const mgrState = await bleManager.state();
+      const isPoweredOn = mgrState === BleState.PoweredOn || String(mgrState).toLowerCase() === 'poweredon';
+      if (!isPoweredOn) {
+        setState(prev => ({ ...prev, error: 'Bluetooth is not enabled', isScanning: false }));
+        return;
       }
+    } catch (err) {
+      // non-fatal; continue and rely on errors from startDeviceScan
+    }
 
-      // Check location permissions
-      const hasPermission = await checkLocationServices();
-      if (!hasPermission) {
-        showLocationServicesAlert();
-        throw new Error('Location permission is required for BLE scanning');
-      }
-
-      // Start scanning
-      bleManager.startDeviceScan(
-        null,
-        { allowDuplicates: false },
-        (error, device) => {
-          if (error) {
-            console.error('BLE Scan Error:', error);
-            const errorMessage = error.message.includes('Location services are disabled')
-              ? 'Location services are disabled. Please enable location services to scan for BLE devices.'
-              : error.message;
-            
-            setState(prev => ({
-              ...prev,
-              error: errorMessage,
-              isScanning: false
-            }));
-
-            if (error.message.includes('Location services are disabled')) {
-              showLocationServicesAlert();
-            }
+    // Try to start scan; handle synchronous throws and callback errors robustly
+    let scanStarted = false;
+    try {
+      // startDeviceScan can throw synchronously on some platforms if location services are off
+      bleManager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+        if (error) {
+          // specific handling for common location-disabled error
+          const msg = String(error?.message ?? error);
+          console.error('[Scan] monitor error:', error);
+          if (msg.toLowerCase().includes('location services')) {
+            // user-facing alert and stable error state
+            showLocationServicesAlert();
+            // ensure we stop and mark not scanning
+            try { bleManager.stopDeviceScan(); } catch (_) {}
+            if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
+            setState(prev => ({ ...prev, error: 'Location services are disabled', isScanning: false }));
             return;
           }
 
-          if (device?.name) {
-            setState(prev => ({
-              ...prev,
-              devices: Array.from(
-                new Map(
-                  [...prev.devices, device].map(item => [item.id, item])
-                ).values()
-              )
-            }));
-          }
+          // generic BLE error: set error and stop scanning
+          try { bleManager.stopDeviceScan(); } catch (_) {}
+          if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
+          setState(prev => ({ ...prev, error: msg, isScanning: false }));
+          return;
         }
-      );
 
-      // Stop scanning after 10 seconds
-      setTimeout(() => {
-        bleManager.stopDeviceScan();
-        setState(prev => ({
-          ...prev,
-          isScanning: false
-        }));
-      }, 10000);
+        // device found
+        if (device) {
+          setState(prev => {
+            const map = new Map<string, Device>();
+            [...prev.devices, device].forEach(d => {
+              if (!map.has(d.id)) map.set(d.id, d);
+              else {
+                const existing = map.get(d.id)!;
+                if (!existing.name && d.name) map.set(d.id, d);
+              }
+            });
+            return { ...prev, devices: Array.from(map.values()) };
+          });
+        }
+      });
 
-    } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to start scanning',
-        isScanning: false
-      }));
+      // if startDeviceScan didn't throw, consider scan started
+      scanStarted = true;
+      setState(prev => ({ ...prev, isScanning: true, error: null }));
+    } catch (startErr: any) {
+      // synchronous error (e.g. location services disabled)
+      const msg = String(startErr?.message ?? startErr);
+      console.error('[Scan] startDeviceScan threw:', startErr);
+      if (msg.toLowerCase().includes('location services')) {
+        showLocationServicesAlert();
+        setState(prev => ({ ...prev, error: 'Location services are disabled', isScanning: false }));
+      } else {
+        setState(prev => ({ ...prev, error: msg, isScanning: false }));
+      }
+      return;
     }
-  }, []);
+
+    // If scan started, set an auto-stop timeout; ensure we clear previous one
+    if (scanStarted) {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+        scanTimeoutRef.current = null;
+      }
+      scanTimeoutRef.current = setTimeout(() => {
+        try { bleManager.stopDeviceScan(); } catch (_) {}
+        setState(prev => ({ ...prev, isScanning: false }));
+        scanTimeoutRef.current = null;
+      }, 10000);
+    }
+  }, [bleManager, checkLocationServices, showLocationServicesAlert]);
 
   // Connect to a BLE device
   const connectToDevice = useCallback(async (device: Device) => {
     try {
+      // Ensure scanning stopped
+      try { bleManager.stopDeviceScan(); } catch (_) {}
+      if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
       setState(prev => ({ ...prev, isScanning: false, error: null }));
-      
-      // Stop scanning when connecting
-      bleManager.stopDeviceScan();
-      
-      // Connect to the device
+
       const connectedDevice = await device.connect();
-      
-      // Discover services and characteristics
       await connectedDevice.discoverAllServicesAndCharacteristics();
-      
-      // Determine device type based on name or other characteristics
-      const deviceType = determineDeviceType(device);
-      
-      // Start notifications or read data based on device type
+
+      const deviceType: DeviceType = determineDeviceType(device);
+
+      setState(prev => ({ ...prev, connectedDevice, deviceType, devices: [], isScanning: false }));
+
+      // Setup notifications (best-effort)
       await setupDeviceNotifications(connectedDevice, deviceType);
-      
-      setState(prev => ({
-        ...prev,
-        connectedDevice,
-        deviceType,
-        devices: [],
-        isScanning: false
-      }));
-      
+
       return true;
-    } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to connect to device',
-        isScanning: false
-      }));
+    } catch (err) {
+      console.error('connectToDevice error', err);
+      setState(prev => ({ ...prev, error: err instanceof Error ? err.message : String(err), isScanning: false }));
       return false;
     }
-  }, []);
+  }, [bleManager]);
 
-  // Disconnect from device
+  // Disconnect
   const disconnectDevice = useCallback(async () => {
-    if (state.connectedDevice) {
+    const connected = state.connectedDevice;
+    if (connected) {
       try {
-        await state.connectedDevice.cancelConnection();
-      } catch (error) {
-        console.error('Error disconnecting:', error);
+        await connected.cancelConnection();
+      } catch (err) {
+        console.warn('Error cancelling connection', err);
       }
     }
-    
     setState(prev => ({
       ...prev,
       connectedDevice: null,
       deviceType: null,
       deviceData: {},
-      devices: []
+      devices: [],
     }));
   }, [state.connectedDevice]);
 
-  // Sync data to Supabase
+  // Sync to Supabase (user passes client)
   const syncToSupabase = useCallback(async (supabaseClient: any) => {
-    if (!state.connectedDevice || !state.deviceData) return;
-    
+    if (!state.connectedDevice) return;
     try {
-      const { data, error } = await supabaseClient
-        .from('health_metrics')
-        .upsert({
-          device_id: state.connectedDevice.id,
-          device_name: state.connectedDevice.name || 'Unknown Device',
-          device_type: state.deviceType,
-          heart_rate: state.deviceData.heartRate,
-          steps: state.deviceData.steps,
-          battery: state.deviceData.battery,
-          timestamp: new Date().toISOString(),
-          user_id: supabaseClient.auth.user()?.id
-        });
-      
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      console.error('Error syncing to Supabase:', error);
-      throw error;
+      await supabaseClient.from('health_metrics').upsert({
+        device_id: state.connectedDevice.id,
+        device_name: state.connectedDevice.name ?? 'Unknown Device',
+        device_type: state.deviceType,
+        heart_rate: state.deviceData.heartRate ?? null,
+        steps: state.deviceData.steps ?? null,
+        battery: state.deviceData.battery ?? null,
+        timestamp: new Date().toISOString(),
+        user_id: supabaseClient.auth?.user?.()?.id ?? null,
+      });
+    } catch (err) {
+      console.error('Error syncing to Supabase', err);
+      throw err;
     }
   }, [state.connectedDevice, state.deviceData, state.deviceType]);
 
-  // Helper function to determine device type
+  // Determine device type by name
   const determineDeviceType = (device: Device): DeviceType => {
-    const name = device.name?.toLowerCase() || '';
-    
+    const name = (device.name ?? '').toLowerCase();
     if (name.includes('mi band') || name.includes('xiaomi')) return 'miband';
     if (name.includes('amazfit')) return 'amazfit';
     if (name.includes('firebolt')) return 'firebolt';
-    
     return 'generic';
   };
 
-  // Setup device-specific notifications
-  const setupDeviceNotifications = async (device: Device, deviceType: DeviceType) => {
-    // Implement device-specific notification setup here
-    // This is a simplified example - you'll need to implement the actual BLE service/characteristic UUIDs
-    // for each device type you want to support
-    
-    // Example for heart rate monitoring (standard BLE service)
+  // Parse heart rate from base64 char value
+  const parseHeartRateFromBase64 = (b64?: string): number | undefined => {
+    if (!b64) return undefined;
     try {
-      await device.monitorCharacteristicForService(
-        '180D', // Heart Rate Service
-        '2A37', // Heart Rate Measurement Characteristic
-        (error, characteristic) => {
+      const buf = Buffer.from(b64, 'base64');
+      if (buf.length >= 2) {
+        const flags = buf.readUInt8(0);
+        const is16 = (flags & 0x01) !== 0;
+        const hr = is16 ? (buf.length >= 3 ? buf.readUInt16LE(1) : undefined) : buf.readUInt8(1);
+        if (typeof hr === 'number' && hr > 0) return hr;
+      } else if (buf.length === 1) {
+        return buf.readUInt8(0);
+      }
+    } catch (_) {}
+    return undefined;
+  };
+
+  // Setup notifications (simplified)
+  const setupDeviceNotifications = async (device: Device, deviceType: DeviceType) => {
+    try {
+      (device as any).monitorCharacteristicForService?.(
+        '180D',
+        '2A37',
+        (error: any, characteristic: Characteristic | null) => {
           if (error) {
-            console.error('Error monitoring heart rate:', error);
+            console.warn('Heart rate monitor error', error);
             return;
           }
-          
-          if (characteristic?.value) {
-            // Parse heart rate value (format depends on the BLE spec)
-            const value = characteristic.value;
-            const heartRate = value.charCodeAt(0); // Simplified example
-            
+          const hr = parseHeartRateFromBase64(characteristic?.value ?? undefined);
+          if (typeof hr === 'number') {
             setState(prev => ({
               ...prev,
               deviceData: {
                 ...prev.deviceData,
-                heartRate,
-                lastUpdated: new Date()
+                heartRate: hr,
+                lastUpdated: new Date(),
               }
             }));
           }
         }
       );
-    } catch (error) {
-      console.error('Error setting up notifications:', error);
+    } catch (err) {
+      console.warn('setupDeviceNotifications error (hr)', err);
     }
+
+    // read battery char if present (best-effort)
+    try {
+      const battChar = await (device as any).readCharacteristicForService?.('180F', '2A19').catch(() => null);
+      if (battChar?.value) {
+        const lvl = Buffer.from(battChar.value, 'base64').readUInt8(0);
+        if (typeof lvl === 'number') {
+          setState(prev => ({
+            ...prev,
+            deviceData: {
+              ...prev.deviceData,
+              battery: lvl,
+              lastUpdated: new Date(),
+            },
+          }));
+        }
+      }
+    } catch (_) {}
   };
+
+  // Cleanup BleManager
+  useEffect(() => {
+    return () => {
+      try {
+        bleManager.stopDeviceScan();
+      } catch (_) {}
+      try {
+        // Destroy manager to free native resources (may throw on some RN versions)
+        bleManager.destroy?.();
+      } catch (_) {}
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+        scanTimeoutRef.current = null;
+      }
+    };
+  }, [bleManager]);
 
   return {
     ...state,
@@ -334,12 +410,10 @@ const useBLE = () => {
     clearError: () => setState(prev => ({ ...prev, error: null })),
     clearDevices: () => setState(prev => ({ ...prev, devices: [] })),
     openSettings: () => {
-      if (Platform.OS === 'ios') {
-        Linking.openURL('app-settings:');
-      } else {
-        Linking.openSettings();
-      }
+      if (Platform.OS === 'ios') Linking.openURL('app-settings:');
+      else Linking.openSettings();
     },
+    syncToSupabase,
   };
 };
 

@@ -186,16 +186,52 @@ export const useBLEWatch = () => {
     }
   }, [hasLocationPermission]);
 
+  // Check if location services are actually enabled on the device (not just permissions)
+  const isLocationServicesEnabled = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      // Try using BleManager's native method if available
+      const checkFn = (BleManager as any).checkLocationServicesEnabled;
+      if (typeof checkFn === 'function') {
+        try {
+          const enabled = await checkFn();
+          return enabled === true;
+        } catch (e) {
+          console.warn('BleManager.checkLocationServicesEnabled error:', e);
+          return true; // Assume enabled if check fails
+        }
+      }
+      return true; // Assume enabled if method not available
+    } catch (err) {
+      console.warn('isLocationServicesEnabled error:', err);
+      return true; // Assume enabled on error
+    }
+  }, []);
+
   // Additional check wrapper called by scan flow; if user returns from settings we re-check
   const checkLocationServices = useCallback(async (): Promise<boolean> => {
     if (!isMounted.current) return false;
     if (Platform.OS !== 'android') return true;
 
-    // quick silent check
+    // First check if location services are enabled on the device
+    const servicesEnabled = await isLocationServicesEnabled();
+    if (!servicesEnabled) {
+      Alert.alert(
+        'Location Services Disabled',
+        'Please enable location services in your device settings to scan for BLE devices.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ]
+      );
+      return false;
+    }
+
+    // quick silent check for permissions
     const silentOk = await requestLocationPermission(false);
     if (silentOk) return true;
 
-    // otherwise actively request
+    // otherwise actively request permissions
     const requested = await requestLocationPermission(true);
     if (!requested) {
       // show friendly dialog guiding to settings (avoid spamming)
@@ -209,7 +245,7 @@ export const useBLEWatch = () => {
       );
     }
     return requested;
-  }, [requestLocationPermission]);
+  }, [requestLocationPermission, isLocationServicesEnabled]);
 
   // ---------- small utilities ----------
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
@@ -574,7 +610,17 @@ export const useBLEWatch = () => {
     try {
       bleManagerRef.current?.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
         if (!isMounted.current) return;
-        if (error) { handleMonitorError(error, 'Scan'); stopScan(); return; }
+        if (error) {
+          const { message } = handleMonitorError(error, 'Scan');
+          // Check if this is a location services error
+          if (message.toLowerCase().includes('location')) {
+            safeSetWatchData({ status: 'error', error: 'Location services are disabled' });
+          } else {
+            safeSetWatchData({ status: 'error', error: message });
+          }
+          stopScan();
+          return;
+        }
         if (device && device.id) {
           setDevices(prev => (prev.some(d => d.id === device.id) ? prev : [...prev, device]));
         }
