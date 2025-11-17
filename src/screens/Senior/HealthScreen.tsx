@@ -76,7 +76,7 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
   const { isDark } = useTheme();
   const { currentLanguage } = useTranslation();
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'activity' | 'sleep' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview'>('overview');
   const [showDeviceList, setShowDeviceList] = useState(false);
   
   // Define available device types with display names and icons
@@ -127,9 +127,6 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
   const { translatedText: bloodPressureText = 'Blood Pressure' } = useCachedTranslation('Blood Pressure', currentLanguage);
   const { translatedText: caloriesText = 'Calories' } = useCachedTranslation('Calories', currentLanguage);
   const { translatedText: distanceText = 'Distance' } = useCachedTranslation('Distance', currentLanguage);
-  const { translatedText: sleepText = 'Sleep' } = useCachedTranslation('Sleep', currentLanguage);
-  const { translatedText: activityText = 'Activity' } = useCachedTranslation('Activity', currentLanguage);
-  const { translatedText: settingsText = 'Settings' } = useCachedTranslation('Settings', currentLanguage);
   const { translatedText: connectText = 'Connect' } = useCachedTranslation('Connect', currentLanguage);
   const { translatedText: disconnectText = 'Disconnect' } = useCachedTranslation('Disconnect', currentLanguage);
   const { translatedText: syncText = 'Sync' } = useCachedTranslation('Sync', currentLanguage);
@@ -410,6 +407,7 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
   // Render overview tab
   const renderOverviewTab = () => (
     <ScrollView
+      style={{ flex: 1 }}
       contentContainerStyle={styles.scrollContent}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4FD1C5']} tintColor={isDark ? '#4FD1C5' : '#2C7A7B'} />
@@ -556,78 +554,6 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
         </View>
       </View>
 
-      {/* Activity Chart */}
-      <View style={[styles.chartContainer, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-        <View style={styles.chartHeader}>
-          <Text style={[styles.chartTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{stepsText} {activityText}</Text>
-          <TouchableOpacity onPress={() => setActiveTab('activity')}>
-            <Text style={{ color: isDark ? '#4FD1C5' : '#2C7A7B', fontSize: 12 }}>View All</Text>
-          </TouchableOpacity>
-        </View>
-
-        <LineChart
-          data={{
-            labels: chartData.labels,
-            datasets: [{ data: chartData.data, color: (opacity = 1) => (isDark ? `rgba(79, 209, 197, ${opacity})` : `rgba(44, 122, 123, ${opacity})`), strokeWidth: 2 }]
-          }}
-          width={CHART_WIDTH}
-          height={200}
-          chartConfig={{
-            backgroundColor: isDark ? '#2D3748' : '#FFFFFF',
-            backgroundGradientFrom: isDark ? '#2D3748' : '#FFFFFF',
-            backgroundGradientTo: isDark ? '#2D3748' : '#FFFFFF',
-            decimalPlaces: 0,
-            color: (opacity = 1) => (isDark ? `rgba(255, 255, 255, ${opacity})` : `rgba(0, 0, 0, ${opacity})`),
-            labelColor: (opacity = 1) => (isDark ? `rgba(255, 255, 255, ${opacity})` : `rgba(0, 0, 0, ${opacity})`),
-            style: { borderRadius: 8 },
-            propsForDots: { r: '3', strokeWidth: '1', stroke: isDark ? '#4FD1C5' : '#2C7A7B', fill: isDark ? '#1A202C' : '#FFFFFF' },
-            propsForBackgroundLines: { stroke: isDark ? 'rgba(160, 174, 192, 0.2)' : 'rgba(113, 128, 150, 0.2)' },
-            fillShadowGradient: isDark ? '#4FD1C5' : '#2C7A7B',
-            fillShadowGradientOpacity: 0.1,
-            strokeWidth: 1,
-            barPercentage: 0.5,
-            useShadowColorFromDataset: false
-          }}
-          bezier
-          style={styles.chart}
-          withDots
-          withInnerLines
-          withOuterLines
-          fromZero
-          segments={4}
-        />
-      </View>
-
-      {/* Sleep Summary */}
-      {watchData?.sleepData && (
-        <TouchableOpacity style={[styles.sleepCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]} onPress={() => setActiveTab('sleep')}>
-          <View style={styles.sleepHeader}>
-            <Ionicons name="moon" size={20} color={isDark ? '#4FD1C5' : '#2C7A7B'} />
-            <Text style={[styles.sleepTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{sleepText} {activityText}</Text>
-            <Ionicons name="chevron-forward" size={20} color={isDark ? '#A0AEC0' : '#718096'} style={{ marginLeft: 'auto' }} />
-          </View>
-
-          <View style={styles.sleepStats}>
-            <View style={styles.sleepStat}>
-              <Text style={[styles.sleepStatValue, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{watchData.sleepData ? Math.floor(watchData.sleepData.deepSleep / 60) : '--'}</Text>
-              <Text style={[styles.sleepStatLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>Deep</Text>
-            </View>
-            <View style={styles.sleepStat}>
-              <Text style={[styles.sleepStatValue, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{watchData.sleepData ? Math.floor(watchData.sleepData.lightSleep / 60) : '--'}</Text>
-              <Text style={[styles.sleepStatLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>Light</Text>
-            </View>
-            <View style={styles.sleepStat}>
-              <Text style={[styles.sleepStatValue, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{watchData.sleepData ? Math.floor(watchData.sleepData.remSleep / 60) : '--'}</Text>
-              <Text style={[styles.sleepStatLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>REM</Text>
-            </View>
-            <View style={styles.sleepStat}>
-              <Text style={[styles.sleepStatValue, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{watchData.sleepData ? Math.floor(watchData.sleepData.awake / 60) : '--'}</Text>
-              <Text style={[styles.sleepStatLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>Awake</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-      )}
-
       <TouchableOpacity style={[styles.syncButton, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]} onPress={() => typeof syncDeviceData === 'function' && syncDeviceData()} disabled={watchData?.status !== 'connected'}>
         <Ionicons name="sync" size={20} color={watchData?.status === 'connected' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#4A5568' : '#CBD5E0')} style={{ marginRight: 8 }} />
         <Text style={[styles.syncButtonText, { color: watchData?.status === 'connected' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#4A5568' : '#CBD5E0') }]}>{syncText}</Text>
@@ -635,73 +561,8 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
     </ScrollView>
   );
 
-  const renderActivityTab = () => (
-    <View style={{ flex: 1, padding: 16 }}>
-      <Text style={{ color: isDark ? '#E2E8F0' : '#1A202C', fontSize: 16 }}>Activity tab content will go here</Text>
-    </View>
-  );
-
-  const renderSleepTab = () => (
-    <View style={{ flex: 1, padding: 16 }}>
-      <Text style={{ color: isDark ? '#E2E8F0' : '#1A202C', fontSize: 16 }}>Sleep tab content will go here</Text>
-    </View>
-  );
-
-  const renderSettingsTab = () => (
-    <View style={{ flex: 1, padding: 16 }}>
-      <Text style={[styles.sectionHeader, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{deviceText} {settingsText}</Text>
-
-      <View style={[styles.settingItem, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-        <Text style={[styles.settingLabel, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{deviceText} {typeText}</Text>
-      </View>
-
-      <View style={[styles.settingItem, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-        <Text style={[styles.settingLabel, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>Notifications</Text>
-        <Ionicons name="chevron-forward" size={20} color={isDark ? '#A0AEC0' : '#718096'} />
-      </View>
-
-      <View style={[styles.settingItem, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-        <Text style={[styles.settingLabel, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>Export Data</Text>
-        <Ionicons name="download-outline" size={20} color={isDark ? '#A0AEC0' : '#718096'} />
-      </View>
-
-      <View style={[styles.settingItem, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-        <Text style={[styles.settingLabel, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>About</Text>
-        <Ionicons name="information-circle-outline" size={20} color={isDark ? '#A0AEC0' : '#718096'} />
-      </View>
-
-      {/* Device type selector */}
-      <View style={{ marginTop: 12 }}>
-        <Text style={{ marginBottom: 8, color: isDark ? '#A0AEC0' : '#718096' }}>{typeText}</Text>
-        <View style={styles.deviceTypeSelector}>
-          {(deviceTypes || []).map((device: any) => (
-            <TouchableOpacity
-              key={device.type}
-              style={[
-                styles.deviceTypeButton,
-                selectedDeviceType === device.type && {
-                  backgroundColor: isDark ? '#4FD1C5' : '#2C7A7B',
-                  borderColor: isDark ? '#4FD1C5' : '#2C7A7B'
-                }
-              ]}
-              onPress={() => handleDeviceTypeChange(device.type)}
-            >
-              <Text style={[styles.deviceTypeButtonText, selectedDeviceType === device.type ? { color: '#FFFFFF' } : { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{device.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-    </View>
-  );
-
   const renderContent = () => {
-    switch (activeTab) {
-      case 'activity': return renderActivityTab();
-      case 'sleep': return renderSleepTab();
-      case 'settings': return renderSettingsTab();
-      case 'overview':
-      default: return renderOverviewTab();
-    }
+    return renderOverviewTab();
   };
 
   // Device list modal (new layout)
@@ -797,27 +658,6 @@ const HealthScreen: React.FC<HealthScreenProps> = ({ route, navigation }) => {
           </View>
         </View>
 
-        <View style={styles.tabsContainer}>
-          <TouchableOpacity style={[styles.tab, activeTab === 'overview' && [styles.activeTab, { borderBottomColor: isDark ? '#4FD1C5' : '#2C7A7B' }]]} onPress={() => setActiveTab('overview')}>
-            <Ionicons name="pulse" size={20} color={activeTab === 'overview' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096')} />
-            <Text style={[styles.tabText, { color: activeTab === 'overview' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096') }]}>Overview</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.tab, activeTab === 'activity' && [styles.activeTab, { borderBottomColor: isDark ? '#4FD1C5' : '#2C7A7B' }]]} onPress={() => setActiveTab('activity')}>
-            <Ionicons name="walk" size={20} color={activeTab === 'activity' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096')} />
-            <Text style={[styles.tabText, { color: activeTab === 'activity' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096') }]}>{activityText}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.tab, activeTab === 'sleep' && [styles.activeTab, { borderBottomColor: isDark ? '#4FD1C5' : '#2C7A7B' }]]} onPress={() => setActiveTab('sleep')}>
-            <Ionicons name="moon" size={20} color={activeTab === 'sleep' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096')} />
-            <Text style={[styles.tabText, { color: activeTab === 'sleep' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096') }]}>{sleepText}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.tab, activeTab === 'settings' && [styles.activeTab, { borderBottomColor: isDark ? '#4FD1C5' : '#2C7A7B' }]]} onPress={() => setActiveTab('settings')}>
-            <Ionicons name="settings" size={20} color={activeTab === 'settings' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096')} />
-            <Text style={[styles.tabText, { color: activeTab === 'settings' ? (isDark ? '#4FD1C5' : '#2C7A7B') : (isDark ? '#A0AEC0' : '#718096') }]}>{settingsText}</Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
       <View style={styles.content}>{renderContent()}</View>
@@ -861,10 +701,6 @@ const styles = StyleSheet.create({
   headerActions: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center' },
   refreshButton: { padding: 4 },
   title: { fontSize: 20, fontWeight: 'bold', marginLeft: 8 },
-  tabsContainer: { flexDirection: 'row', marginTop: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)' },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  activeTab: { borderBottomWidth: 2 },
-  tabText: { marginLeft: 6, fontSize: 14, fontWeight: '500' },
   content: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 24 },
 
@@ -895,48 +731,11 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 32, fontWeight: 'bold', marginRight: 4 },
   metricUnit: { fontSize: 12, opacity: 0.7 },
 
-  // debug health metric (new)
-  healthMetric: {
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  metricLabel: {
-    fontSize: 16,
-    marginBottom: 8,
-  },
-  lastUpdated: {
-    fontSize: 12,
-    marginTop: 4,
-  },
-
-  // chart
-  chartContainer: { borderRadius: 12, padding: 16, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
-  chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  chartTitle: { fontSize: 16, fontWeight: '600' },
-  chart: { marginVertical: 8, borderRadius: 8 },
-
-  // sleep
-  sleepCard: { borderRadius: 12, padding: 16, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
-  sleepHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  sleepTitle: { fontSize: 16, fontWeight: '600', marginLeft: 8 },
-  sleepStats: { flexDirection: 'row', justifyContent: 'space-between' },
-  sleepStat: { alignItems: 'center', flex: 1 },
-  sleepStatValue: { fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
-  sleepStatLabel: { fontSize: 12, opacity: 0.7 },
 
   // sync
   syncButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
   syncButtonText: { fontSize: 14, fontWeight: '500' },
 
-  // settings
-  sectionHeader: { fontSize: 14, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12, opacity: 0.8 },
-  settingItem: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
-  settingLabel: { flex: 1, fontSize: 16 },
-
-  deviceTypeSelector: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
-  deviceTypeButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', marginRight: 8, marginBottom: 8 },
-  deviceTypeButtonText: { fontSize: 12, fontWeight: '500' },
 
   // error
   errorContainer: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 8, marginBottom: 16 },
