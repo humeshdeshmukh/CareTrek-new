@@ -35,6 +35,12 @@ export const useBLEWatch = () => {
   const syncToSupabase = useCallback(async (data: WatchDataType) => {
     if (isSyncing) return false;
 
+    // Skip sync if no device ID - we need it for the database
+    if (!data.deviceId) {
+      console.warn('[BLE] Skipping sync - no device ID available');
+      return false;
+    }
+
     setIsSyncing(true);
     setSyncError(null);
 
@@ -45,7 +51,6 @@ export const useBLEWatch = () => {
       // Ensure we have all required fields for the health metrics
       const metricData: WatchDataType = {
         ...data,
-        deviceId: data.deviceId || 'unknown',
         deviceType: data.deviceType || 'generic',
         lastUpdated: data.lastUpdated || new Date(),
         timestamp: new Date().toISOString()
@@ -195,16 +200,19 @@ export const useBLEWatch = () => {
       if (typeof checkFn === 'function') {
         try {
           const enabled = await checkFn();
+          console.log('[BLE] Location services check result:', enabled);
           return enabled === true;
         } catch (e) {
-          console.warn('BleManager.checkLocationServicesEnabled error:', e);
-          return true; // Assume enabled if check fails
+          console.warn('[BLE] BleManager.checkLocationServicesEnabled error:', e);
+          // On error, we can't determine state - let scan attempt and handle error in callback
+          return true;
         }
       }
-      return true; // Assume enabled if method not available
+      console.log('[BLE] BleManager.checkLocationServicesEnabled not available - allowing scan to attempt');
+      return true; // Method not available - let scan attempt; errors will be caught in callback
     } catch (err) {
-      console.warn('isLocationServicesEnabled error:', err);
-      return true; // Assume enabled on error
+      console.warn('[BLE] isLocationServicesEnabled error:', err);
+      return true; // On error, allow scan to attempt
     }
   }, []);
 
@@ -213,25 +221,11 @@ export const useBLEWatch = () => {
     if (!isMounted.current) return false;
     if (Platform.OS !== 'android') return true;
 
-    // First check if location services are enabled on the device
-    const servicesEnabled = await isLocationServicesEnabled();
-    if (!servicesEnabled) {
-      Alert.alert(
-        'Location Services Disabled',
-        'Please enable location services in your device settings to scan for BLE devices.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Settings', onPress: () => Linking.openSettings() },
-        ]
-      );
-      return false;
-    }
-
-    // quick silent check for permissions
+    // Quick silent check for permissions first (non-blocking)
     const silentOk = await requestLocationPermission(false);
     if (silentOk) return true;
 
-    // otherwise actively request permissions
+    // If permissions not granted, actively request them
     const requested = await requestLocationPermission(true);
     if (!requested) {
       // show friendly dialog guiding to settings (avoid spamming)
@@ -245,7 +239,7 @@ export const useBLEWatch = () => {
       );
     }
     return requested;
-  }, [requestLocationPermission, isLocationServicesEnabled]);
+  }, [requestLocationPermission]);
 
   // ---------- small utilities ----------
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
@@ -597,24 +591,42 @@ export const useBLEWatch = () => {
     if (!bleManagerRef.current || isScanning) return false;
     if (isScanning) return;
 
-    const ok = await checkLocationServices();
-    if (!ok) {
-      safeSetWatchData({ status: 'error' });
-      return;
-    }
+    console.log('[BLE] startScan called');
+
+    // Check location services/permissions (non-blocking - let scan attempt anyway)
+    checkLocationServices().catch(err => {
+      console.warn('[BLE] checkLocationServices error (non-fatal):', err);
+    });
 
     setDevices([]);
     setIsScanning(true);
     safeSetWatchData({ status: 'scanning' });
 
+    let locationErrorShown = false; // Track if we've already shown the alert
+
     try {
+      console.log('[BLE] Starting device scan...');
       bleManagerRef.current?.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
         if (!isMounted.current) return;
         if (error) {
           const { message } = handleMonitorError(error, 'Scan');
+          console.error('[BLE] Scan error:', message);
           // Check if this is a location services error
           if (message.toLowerCase().includes('location')) {
+            console.warn('[BLE] Location services error detected during scan');
             safeSetWatchData({ status: 'error', error: 'Location services are disabled' });
+            // Show alert to user only once per scan attempt
+            if (!locationErrorShown) {
+              locationErrorShown = true;
+              Alert.alert(
+                'Location Services Required',
+                'BLE scanning requires location services to be enabled. Please:\n\n1. Go to Settings\n2. Select Location\n3. Turn ON location services\n\nThen return to CareTrek to scan for your smartwatch.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                ]
+              );
+            }
           } else {
             safeSetWatchData({ status: 'error', error: message });
           }
@@ -622,12 +634,16 @@ export const useBLEWatch = () => {
           return;
         }
         if (device && device.id) {
+          console.log('[BLE] Device found:', device.name || device.id);
           setDevices(prev => (prev.some(d => d.id === device.id) ? prev : [...prev, device]));
         }
       });
 
+      console.log('[BLE] Scan started successfully');
+
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = setTimeout(() => {
+        console.log('[BLE] Scan timeout - stopping scan');
         try { bleManagerRef.current?.stopDeviceScan(); } catch (_) {}
         if (!isMounted.current) return;
         setIsScanning(false);
@@ -635,6 +651,7 @@ export const useBLEWatch = () => {
         scanTimeoutRef.current = null;
       }, 10000);
     } catch (err) {
+      console.error('[BLE] startScan exception:', err);
       handleMonitorError(err, 'startScan');
       safeSetWatchData({ status: 'error' });
       setIsScanning(false);
@@ -645,6 +662,7 @@ export const useBLEWatch = () => {
     const mgr = bleManagerRef.current;
     if (!mgr) return false;
 
+    // Wrap entire connection in a timeout (30 seconds max total)
     try {
       try {
         await withRetry(async () => {
@@ -660,25 +678,70 @@ export const useBLEWatch = () => {
       stopScan();
       safeSetWatchData({ status: 'connecting' });
 
-      const connected = await withRetry<Device>(() => device.connect() as Promise<Device>, 3, 400);
-      await connected.discoverAllServicesAndCharacteristics().catch(() => null);
+      console.log('[BLE] Connecting to device:', device.name || device.id);
+      
+      // Add timeout to connection attempt (10 seconds max)
+      const connectPromise = withRetry<Device>(() => device.connect() as Promise<Device>, 3, 400);
+      const connectWithTimeout = Promise.race([
+        connectPromise,
+        new Promise<Device>((_, reject) => 
+          setTimeout(() => reject(new Error('Connection timeout after 10s')), 10000)
+        )
+      ]);
+      
+      const connected = await connectWithTimeout;
+      console.log('[BLE] Connected, discovering services...');
+      
+      // Add timeout to service discovery (8 seconds max)
+      const discoverPromise = connected.discoverAllServicesAndCharacteristics();
+      const discoverWithTimeout = Promise.race([
+        discoverPromise,
+        new Promise<void>((_, reject) => 
+          setTimeout(() => reject(new Error('Service discovery timeout after 8s')), 8000)
+        )
+      ]);
+      
+      await discoverWithTimeout.catch(err => {
+        console.warn('[BLE] Service discovery error (non-fatal):', err);
+        // Continue anyway - we may have partial services
+      });
+      
       connectedDeviceRef.current = connected;
-
-      const { serviceSet, charSet, svcToChars } = await logDeviceInfo(connected);
+      console.log('[BLE] Device connected and services discovered');
 
       const deviceName = device.name ?? device.id;
+      const deviceId = device.id; // Capture the actual device ID
       let deviceType: DeviceType = 'generic';
       const lower = (device.name ?? '').toLowerCase();
       if (lower.includes('mi band') || lower.includes('miband') || lower.includes('mi')) deviceType = 'miband';
       else if (lower.includes('amazfit')) deviceType = 'amazfit';
       else if (lower.includes('firebolt')) deviceType = 'firebolt';
 
+      // Mark as connected early so UI updates immediately
       safeSetWatchData((prev: WatchDataType) => ({
         ...prev,
+        deviceId,
         deviceName,
         deviceType,
+        status: 'connected',
         lastUpdated: new Date()
       }));
+      
+      console.log('[BLE] Logging device info...');
+      // Add timeout to logDeviceInfo (5 seconds max)
+      const logPromise = logDeviceInfo(connected);
+      const logWithTimeout = Promise.race([
+        logPromise,
+        new Promise<ReturnType<typeof logDeviceInfo>>((_, reject) => 
+          setTimeout(() => reject(new Error('logDeviceInfo timeout after 5s')), 5000)
+        )
+      ]);
+      
+      const { serviceSet, charSet, svcToChars } = await logWithTimeout.catch(err => {
+        console.warn('[BLE] logDeviceInfo error:', err);
+        // Return empty sets to continue
+        return { serviceSet: new Set<string>(), charSet: new Set<string>(), svcToChars: new Map<string, CharFlags[]>() };
+      });
 
       // read RSSI
       try {
@@ -830,34 +893,43 @@ export const useBLEWatch = () => {
     }
   }, [isSyncing, stopScan, watchData, syncToSupabase, clearAllMonitors]);
 
-  // Auto-sync effect
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (watchData.status === 'connected' && watchData.deviceName && watchData.lastUpdated) {
-        try {
-          setIsSyncing(true);
-          setSyncError(null);
-          const has = watchData.heartRate !== undefined ||
-                     watchData.oxygenSaturation !== undefined ||
-                     watchData.bloodPressure !== undefined ||
-                     watchData.steps !== undefined ||
-                     watchData.battery !== undefined ||
-                     watchData.calories !== undefined;
-
-          if (!has) return;
-
-          await syncToSupabase(watchData);
-          setLastSync(new Date());
-        } catch (e) {
-          console.error('Auto-sync error', e);
-          setSyncError(e instanceof Error ? e.message : 'Unknown');
-        } finally {
-          setIsSyncing(false);
-        }
-      }
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [watchData, syncToSupabase]);
+  // Auto-sync effect disabled - only sync on manual button press
+  // This prevents the sync button from flickering or auto-clicking
+  // Users can manually sync by pressing the "Sync Now" button
+  // useEffect(() => {
+  //   // Only sync if connected and has data
+  //   if (watchData.status !== 'connected' || !watchData.deviceName) {
+  //     return;
+  //   }
+  //
+  //   const has = watchData.heartRate !== undefined ||
+  //              watchData.oxygenSaturation !== undefined ||
+  //              watchData.bloodPressure !== undefined ||
+  //              watchData.steps !== undefined ||
+  //              watchData.battery !== undefined ||
+  //              watchData.calories !== undefined;
+  //
+  //   if (!has) return;
+  //
+  //   // Debounce auto-sync: wait 5 seconds after last watchData update before syncing
+  //   const timer = setTimeout(async () => {
+  //     if (!isMounted.current) return;
+  //     
+  //     try {
+  //       setIsSyncing(true);
+  //       setSyncError(null);
+  //       await syncToSupabase(watchData);
+  //       setLastSync(new Date());
+  //     } catch (e) {
+  //       console.error('Auto-sync error', e);
+  //       setSyncError(e instanceof Error ? e.message : 'Unknown');
+  //     } finally {
+  //       setIsSyncing(false);
+  //     }
+  //   }, 5000); // 5 second debounce
+  //
+  //   return () => clearTimeout(timer);
+  // }, [watchData.heartRate, watchData.oxygenSaturation, watchData.bloodPressure, watchData.steps, watchData.battery, watchData.calories, watchData.status, watchData.deviceName, syncToSupabase]);
 
   // ---------- manager lifecycle ----------
   useEffect(() => {

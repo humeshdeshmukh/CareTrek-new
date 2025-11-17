@@ -5,6 +5,28 @@ import type { WatchData } from '../types/ble';
 // Define the health metrics table name
 const HEALTH_METRICS_TABLE = 'health_metrics';
 
+// Helper to convert device ID (MAC address) to a valid UUID format
+// This creates a deterministic UUID v5-like string from the device ID
+const deviceIdToUUID = (deviceId: string): string => {
+  // Simple hash-based UUID generation from device ID
+  // Format: xxxxxxxx-xxxx-5xxx-yxxx-xxxxxxxxxxxx (v5-like)
+  let hash = 0;
+  for (let i = 0; i < deviceId.length; i++) {
+    const char = deviceId.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  
+  const hashStr = Math.abs(hash).toString(16).padStart(32, '0');
+  return [
+    hashStr.substring(0, 8),
+    hashStr.substring(8, 12),
+    '5' + hashStr.substring(13, 16),
+    ((parseInt(hashStr.substring(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0') + hashStr.substring(18, 20),
+    hashStr.substring(20, 32)
+  ].join('-');
+};
+
 // Interface for the health metrics data
 export interface HealthMetric {
   id?: string;
@@ -31,15 +53,24 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
     }
 
     const now = new Date().toISOString();
+    
+    // Ensure device_id is set; if not, skip saving (don't use 'unknown')
+    if (!deviceData.deviceId) {
+      throw new Error('Device ID is required to save health metrics');
+    }
+    
+    // Convert device ID to UUID format if it's not already a valid UUID
+    const deviceIdValue = deviceData.deviceId.includes('-') ? deviceData.deviceId : deviceIdToUUID(deviceData.deviceId);
+    
     const metric: Omit<HealthMetric, 'id' | 'created_at'> = {
       user_id: userId,
-      device_id: deviceData.deviceId || 'unknown',
-      device_name: deviceData.deviceName,
+      device_id: deviceIdValue,
+      device_name: deviceData.deviceName || 'Unknown Device',
       device_type: deviceData.deviceType || 'generic',
       heart_rate: deviceData.heartRate,
       steps: deviceData.steps,
       battery: deviceData.battery,
-      oxygen_saturation: deviceData.oxygenSaturation,
+      oxygen_saturation: deviceData.oxygenSaturation, // Maps to blood_oxygen in DB
       blood_pressure_systolic: deviceData.bloodPressure?.systolic,
       blood_pressure_diastolic: deviceData.bloodPressure?.diastolic,
       calories: deviceData.calories,
