@@ -16,6 +16,7 @@ import { useBLEWatch } from '../../../hooks/useBLEWatch';
 import { LineChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics } from '../../../services/healthDataService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -29,6 +30,9 @@ const HeartRateScreen: React.FC<any> = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
 
   // Get current user
   useEffect(() => {
@@ -60,46 +64,69 @@ const HeartRateScreen: React.FC<any> = ({ navigation }) => {
     loadMetrics();
   }, [loadMetrics]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await syncDeviceData();
       await loadMetrics();
+      setCacheKey(prev => prev + 1);
+    } catch (error) {
+      console.error('Error refreshing:', error);
     } finally {
       setRefreshing(false);
     }
-  }, [syncDeviceData, loadMetrics]);
+  }, [syncDeviceData, loadMetrics, cacheKey]);
 
-  const handleMeasure = async () => {
+  const handleMeasure = useCallback(async () => {
     try {
       await syncDeviceData();
       await loadMetrics();
+      setCacheKey(prev => prev + 1);
     } catch (error) {
       console.error('Error measuring:', error);
     }
-  };
+  }, [syncDeviceData, loadMetrics, cacheKey]);
 
   const chartData = {
-    labels: metrics.map(m => dayjs(m.timestamp).format('MMM DD')).reverse(),
+    labels: metrics.length > 0 ? metrics.map(m => dayjs(m.timestamp).format('MMM DD')).reverse() : ['No data'],
     datasets: [
       {
-        data: metrics.map(m => m.heart_rate || 0).reverse(),
+        data: metrics.length > 0 ? metrics.map(m => m.heart_rate || 0).reverse() : [0],
         color: () => '#FF6B6B',
         strokeWidth: 2,
       },
     ],
   };
 
-  const currentHeartRate = watchData.heartRate || metrics[0]?.heart_rate || 0;
+  const currentHeartRate = isDemoMode && demoData
+    ? demoData.heartRate
+    : watchData.heartRate || metrics[0]?.heart_rate || 0;
   const avgHeartRate = metrics.length > 0
     ? Math.round(metrics.reduce((sum, m) => sum + (m.heart_rate || 0), 0) / metrics.length)
-    : 0;
+    : isDemoMode && demoData ? demoData.heartRate : 0;
   const maxHeartRate = metrics.length > 0
     ? Math.max(...metrics.map(m => m.heart_rate || 0))
-    : 0;
-  const minHeartRate = metrics.length > 0
+    : isDemoMode && demoData ? demoData.heartRate : 0;
+  const minHeartRate = metrics.length > 0 && metrics.filter(m => m.heart_rate).length > 0
     ? Math.min(...metrics.filter(m => m.heart_rate).map(m => m.heart_rate || 0))
-    : 0;
+    : isDemoMode && demoData ? demoData.heartRate : 0;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#1A202C' : '#FFFFFF' }]}>

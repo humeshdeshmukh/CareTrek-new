@@ -16,6 +16,7 @@ import { useBLEWatch } from '../../../hooks/useBLEWatch';
 import { BarChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getSleepSummary, getUserSleepRecords } from '../../../services/sleepTrackingService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -30,6 +31,9 @@ const SleepScreen: React.FC<any> = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
 
   // Get current user
   useEffect(() => {
@@ -61,11 +65,29 @@ const SleepScreen: React.FC<any> = ({ navigation }) => {
     loadSleepData();
   }, [loadSleepData]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await syncDeviceData();
       await loadSleepData();
+      setCacheKey(prev => prev + 1);
     } finally {
       setRefreshing(false);
     }
@@ -106,7 +128,16 @@ const SleepScreen: React.FC<any> = ({ navigation }) => {
     }
   };
 
-  const latestRecord = records[0];
+  const latestRecord = isDemoMode && demoData?.sleepData
+    ? {
+        duration: demoData.sleepData.duration,
+        quality: demoData.sleepData.quality,
+        deep_sleep: Math.floor(demoData.sleepData.duration * 0.2),
+        light_sleep: Math.floor(demoData.sleepData.duration * 0.5),
+        rem_sleep: Math.floor(demoData.sleepData.duration * 0.2),
+        awake_time: Math.floor(demoData.sleepData.duration * 0.1),
+      }
+    : records[0];
   const avgDuration = sleepData?.averageDuration || 0;
   const avgQuality = sleepData?.averageQuality || 'N/A';
   const totalNights = sleepData?.totalNights || 0;

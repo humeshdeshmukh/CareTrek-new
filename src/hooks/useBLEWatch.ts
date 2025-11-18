@@ -5,6 +5,7 @@ import { BleManager, Device, Characteristic, State as BleState } from 'react-nat
 import { Platform, PermissionsAndroid, Alert, Linking, AppState } from 'react-native';
 import { DeviceType, WatchData as WatchDataType } from '../types/ble';
 import { saveHealthMetrics } from '../services/healthDataService';
+import { backgroundDataService } from '../services/backgroundDataService';
 import { supabase } from '../lib/supabase';
 import { Buffer } from 'buffer';
 
@@ -808,30 +809,56 @@ export const useBLEWatch = () => {
         } catch (e) { handleMonitorError(e, `subscribeIfNotifiable ${svcUuid}/${charUuid}`); }
       };
 
-      // Heart Rate (if present)
+      // Initialize background data service
+      try {
+        await backgroundDataService.initialize(connected, mgr);
+      } catch (e) {
+        console.warn('[BLE] Background service init error:', e);
+      }
+
+      // Heart Rate (if present) - WITH CRASH PREVENTION
       if (serviceSet.has('0000180d-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('0000180d-0000-1000-8000-00805f9b34fb', '00002a37-0000-1000-8000-00805f9b34fb', (characteristic) => {
-          if (!characteristic?.value) return;
-          const hr = parseHeartRate(characteristic.value);
-          if (typeof hr === 'number') updateStableMetric('heartRate', hr, 2);
+          try {
+            if (!characteristic?.value) return;
+            const hr = parseHeartRate(characteristic.value);
+            if (typeof hr === 'number') {
+              updateStableMetric('heartRate', hr, 2);
+              // Add to background collection
+              backgroundDataService.addHeartRateReading(hr);
+            }
+          } catch (err) {
+            console.error('[BLE] Heart rate callback error:', err);
+          }
         });
       }
 
-      // SpO2
+      // SpO2 - WITH CRASH PREVENTION
       if (serviceSet.has('00001822-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('00001822-0000-1000-8000-00805f9b34fb', '00002a5f-0000-1000-8000-00805f9b34fb', (characteristic) => {
-          if (!characteristic?.value) return;
-          const s = parseSpO2(characteristic.value);
-          if (typeof s === 'number') updateStableMetric('oxygenSaturation', s, 2);
+          try {
+            if (!characteristic?.value) return;
+            const s = parseSpO2(characteristic.value);
+            if (typeof s === 'number') {
+              updateStableMetric('oxygenSaturation', s, 2);
+              backgroundDataService.addOxygenReading(s);
+            }
+          } catch (err) {
+            console.error('[BLE] SpO2 callback error:', err);
+          }
         });
       }
 
-      // Blood Pressure
+      // Blood Pressure - WITH CRASH PREVENTION
       if (serviceSet.has('00001810-0000-1000-8000-00805f9b34fb')) {
         subscribeIfNotifiable('00001810-0000-1000-8000-00805f9b34fb', '00002a35-0000-1000-8000-00805f9b34fb', (characteristic) => {
-          if (!characteristic?.value) return;
-          const bp = parseBloodPressure(characteristic.value);
-          if (bp) updateStableMetric('bloodPressure', bp, 2);
+          try {
+            if (!characteristic?.value) return;
+            const bp = parseBloodPressure(characteristic.value);
+            if (bp) updateStableMetric('bloodPressure', bp, 2);
+          } catch (err) {
+            console.error('[BLE] Blood pressure callback error:', err);
+          }
         });
       }
 
@@ -840,25 +867,40 @@ export const useBLEWatch = () => {
         for (const [svcUuid, charList] of Array.from(svcToChars.entries())) {
           for (const c of charList) {
             const lowChar = c.uuid;
-            if (!c.isNotifiable) continue;
             // skip ones we already added
             if (['00002a37-0000-1000-8000-00805f9b34fb','00002a19-0000-1000-8000-00805f9b34fb','00002a5f-0000-1000-8000-00805f9b34fb','00002a35-0000-1000-8000-00805f9b34fb'].includes(lowChar)) continue;
 
             subscribeIfNotifiable(svcUuid, lowChar, (characteristic, svc, charU) => {
-              if (!characteristic?.value) return;
-              const parsed = parseGeneric(characteristic.value, svc, charU);
-              if (!parsed) return;
+              try {
+                if (!characteristic?.value) return;
+                const parsed = parseGeneric(characteristic.value, svc, charU);
+                if (!parsed) return;
 
-              // map parsed outputs to stable updates
-              if ((parsed as any).heartRate !== undefined) updateStableMetric('heartRate', (parsed as any).heartRate, 2);
-              if ((parsed as any).oxygenSaturation !== undefined) updateStableMetric('oxygenSaturation', (parsed as any).oxygenSaturation, 2);
-              if ((parsed as any).bloodPressure !== undefined) updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
-              if ((parsed as any).steps !== undefined) {
-                const s = (parsed as any).steps;
-                if (typeof s === 'number' && s >= 0 && s < 1e8) updateStableMetric('steps', s, 2);
+                // map parsed outputs to stable updates
+                if ((parsed as any).heartRate !== undefined) {
+                  updateStableMetric('heartRate', (parsed as any).heartRate, 2);
+                  backgroundDataService.addHeartRateReading((parsed as any).heartRate);
+                }
+                if ((parsed as any).oxygenSaturation !== undefined) {
+                  updateStableMetric('oxygenSaturation', (parsed as any).oxygenSaturation, 2);
+                  backgroundDataService.addOxygenReading((parsed as any).oxygenSaturation);
+                }
+                if ((parsed as any).bloodPressure !== undefined) updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
+                if ((parsed as any).steps !== undefined) {
+                  const s = (parsed as any).steps;
+                  if (typeof s === 'number' && s >= 0 && s < 1e8) {
+                    updateStableMetric('steps', s, 2);
+                    backgroundDataService.addStepsReading(s);
+                  }
+                }
+                if ((parsed as any).calories !== undefined) {
+                  updateStableMetric('calories', (parsed as any).calories, 2);
+                  backgroundDataService.addCaloriesReading((parsed as any).calories);
+                }
+                if ((parsed as any).battery !== undefined) maybeUpdateBatteryLocal((parsed as any).battery, false);
+              } catch (err) {
+                console.error('[BLE] Vendor callback error:', err);
               }
-              if ((parsed as any).calories !== undefined) updateStableMetric('calories', (parsed as any).calories, 2);
-              if ((parsed as any).battery !== undefined) maybeUpdateBatteryLocal((parsed as any).battery, false);
             });
           }
         }
@@ -882,6 +924,10 @@ export const useBLEWatch = () => {
     try {
       stopScan();
       clearAllMonitors();
+      
+      // Stop background service but keep data for persistence
+      backgroundDataService.stop();
+      
       try { if (connectedDeviceRef.current) await connectedDeviceRef.current.cancelConnection().catch(() => null); } catch (_) {}
       connectedDeviceRef.current = null;
 
@@ -1008,15 +1054,31 @@ export const useBLEWatch = () => {
       try {
         if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
         const dev = connectedDeviceRef.current;
+
+        // Read battery
         const batt = await dev.readCharacteristicForService('180F', '2A19').catch(() => null);
-        if (batt?.value) { const lvl = Buffer.from(batt.value, 'base64').readUInt8(0); if (lvl >= 0 && lvl <= 100) updateStableMetric('battery', lvl, 1); }
+        if (batt?.value) { 
+          const lvl = Buffer.from(batt.value, 'base64').readUInt8(0); 
+          if (lvl >= 0 && lvl <= 100) updateStableMetric('battery', lvl, 1); 
+        }
+
+        // Sync current watch data to Supabase
+        if (watchData && Object.keys(watchData).length > 0) {
+          console.log('[BLE] Syncing data to Supabase:', watchData);
+          await syncToSupabase(watchData);
+        }
+
         return { success: true };
-      } catch (e: any) { return { success: false, error: e?.message ?? String(e) }; }
+      } catch (e: any) { 
+        console.error('[BLE] syncDeviceData error:', e);
+        return { success: false, error: e?.message ?? String(e) }; 
+      }
     },
     syncToSupabase,
     isSyncing,
     lastSync,
     syncError,
+    backgroundDataService,
     webViewRef: { current: null as any },
     handleMessage: () => {},
     handleError: () => {},

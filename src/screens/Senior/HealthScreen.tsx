@@ -21,6 +21,9 @@ import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useBLEWatch } from '../../hooks/useBLEWatch';
+import { syncBackgroundMetricsToDatabase } from '../../services/backgroundSyncService';
+import { demoModeService } from '../../services/demoModeService';
+import { mockDataService } from '../../services/mockDataService';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
@@ -62,6 +65,10 @@ const HealthScreen = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [recentDevices, setRecentDevices] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isSyncingBackground, setIsSyncingBackground] = useState(false);
+  const [backgroundMetricsCount, setBackgroundMetricsCount] = useState(0);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
   const isMountedRef = useRef(true);
 
   const STORAGE_KEY = 'previouslyConnectedDevices';
@@ -103,6 +110,127 @@ const HealthScreen = () => {
     }
   }, []);
 
+  // Load background metrics count
+  const loadBackgroundMetricsCount = useCallback(async () => {
+    try {
+      const metrics = await watchData.backgroundDataService?.getStoredMetrics?.() || [];
+      if (isMountedRef.current) {
+        setBackgroundMetricsCount(metrics.length);
+      }
+    } catch (err) {
+      console.error('Error loading background metrics count:', err);
+    }
+  }, [watchData]);
+
+  // Sync background metrics to database
+  const syncBackgroundMetrics = useCallback(async () => {
+    if (!userId) {
+      Alert.alert('Error', 'User not authenticated');
+      return;
+    }
+
+    setIsSyncingBackground(true);
+    try {
+      const result = await syncBackgroundMetricsToDatabase(userId);
+      if (isMountedRef.current) {
+        if (result.success) {
+          Alert.alert('Success', `Synced ${result.synced} metric collections to database`);
+          setBackgroundMetricsCount(0);
+        } else {
+          Alert.alert('Partial Sync', `Synced ${result.synced}, Failed ${result.failed}`);
+        }
+      }
+    } catch (err) {
+      console.error('Error syncing background metrics:', err);
+      if (isMountedRef.current) {
+        Alert.alert('Error', 'Failed to sync background metrics');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSyncingBackground(false);
+      }
+    }
+  }, [userId]);
+
+  // Initialize demo mode
+  const initializeDemoMode = useCallback(async () => {
+    try {
+      await demoModeService.initialize();
+      const isActive = demoModeService.isActive();
+      if (isMountedRef.current) {
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const mockData = demoModeService.getMockData();
+          setDemoData(mockData);
+        }
+      }
+    } catch (err) {
+      console.error('Error initializing demo mode:', err);
+    }
+  }, []);
+
+  // Toggle demo mode
+  const toggleDemoMode = useCallback(async () => {
+    try {
+      if (isDemoMode) {
+        await demoModeService.disable();
+        if (isMountedRef.current) {
+          setIsDemoMode(false);
+          setDemoData(null);
+        }
+      } else {
+        await demoModeService.enable();
+        if (isMountedRef.current) {
+          setIsDemoMode(true);
+          const mockData = demoModeService.getMockData();
+          setDemoData(mockData);
+        }
+      }
+    } catch (err) {
+      console.error('Error toggling demo mode:', err);
+      Alert.alert('Error', 'Failed to toggle demo mode');
+    }
+  }, [isDemoMode]);
+
+  // Generate new demo data
+  const generateNewDemoData = useCallback(async () => {
+    try {
+      if (!userId) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+      
+      const newData = demoModeService.generateNewMockData();
+      await demoModeService.saveMockDataToSupabase(userId);
+      
+      if (isMountedRef.current) {
+        setDemoData(newData);
+        Alert.alert('Success', 'Demo data generated and saved');
+      }
+    } catch (err) {
+      console.error('Error generating demo data:', err);
+      Alert.alert('Error', 'Failed to generate demo data');
+    }
+  }, [userId]);
+
+  // Generate historical demo data
+  const generateHistoricalDemoData = useCallback(async () => {
+    try {
+      if (!userId) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+      
+      await demoModeService.generateHistoricalData(userId, 7);
+      if (isMountedRef.current) {
+        Alert.alert('Success', 'Generated 7 days of demo data');
+      }
+    } catch (err) {
+      console.error('Error generating historical data:', err);
+      Alert.alert('Error', 'Failed to generate historical data');
+    }
+  }, [userId]);
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
@@ -126,7 +254,11 @@ const HealthScreen = () => {
     getUser();
     // Load previously connected devices
     loadDevicesFromStorage();
-  }, [loadDevicesFromStorage]);
+    // Load background metrics count
+    loadBackgroundMetricsCount();
+    // Initialize demo mode
+    initializeDemoMode();
+  }, [loadDevicesFromStorage, loadBackgroundMetricsCount, initializeDemoMode]);
 
   // Store recently connected device with error handling
   useEffect(() => {
@@ -338,6 +470,38 @@ const HealthScreen = () => {
     >
       {renderDeviceCard()}
 
+      {/* Demo Mode Card */}
+      {isDemoMode && (
+        <View style={[styles.demoCard, { backgroundColor: isDark ? '#2D3748' : '#FFF9E6' }]}>
+          <View style={styles.demoHeader}>
+            <MaterialCommunityIcons name="beaker" size={24} color={isDark ? '#F6AD55' : '#ED8936'} />
+            <Text style={[styles.demoTitle, { color: isDark ? '#F6AD55' : '#ED8936' }]}>Demo Mode Active</Text>
+            <TouchableOpacity onPress={toggleDemoMode}>
+              <MaterialCommunityIcons name="close" size={20} color={isDark ? '#F6AD55' : '#ED8936'} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.demoText, { color: isDark ? '#E2E8F0' : '#744210' }]}>
+            Using simulated watch data for testing
+          </Text>
+          <View style={styles.demoButtonsContainer}>
+            <TouchableOpacity
+              style={[styles.demoButton, { backgroundColor: isDark ? '#4299E1' : '#3182CE' }]}
+              onPress={generateNewDemoData}
+            >
+              <MaterialCommunityIcons name="refresh" size={16} color="white" />
+              <Text style={styles.demoButtonText}>New Data</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.demoButton, { backgroundColor: isDark ? '#48BB78' : '#2F855A' }]}
+              onPress={generateHistoricalDemoData}
+            >
+              <MaterialCommunityIcons name="history" size={16} color="white" />
+              <Text style={styles.demoButtonText}>7-Day History</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       <View style={styles.metricsContainer}>
         <Text style={[styles.sectionTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
           Your Health Metrics
@@ -474,6 +638,24 @@ const HealthScreen = () => {
           </>
         )}
       </TouchableOpacity>
+
+      {/* Background Metrics Sync Button */}
+      {backgroundMetricsCount > 0 && (
+        <TouchableOpacity
+          style={[styles.syncButton, { backgroundColor: isDark ? '#4299E1' : '#3182CE', opacity: isSyncingBackground ? 0.6 : 1, marginTop: 12 }]}
+          onPress={syncBackgroundMetrics}
+          disabled={isSyncingBackground}
+        >
+          {isSyncingBackground ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <>
+              <MaterialCommunityIcons name="cloud-upload" size={20} color="white" />
+              <Text style={styles.syncButtonText}>Sync {backgroundMetricsCount} Background Metrics</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      )}
     </ScrollView>
   );
 
@@ -751,9 +933,19 @@ const HealthScreen = () => {
         <Text style={[styles.headerTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
           Health Dashboard
         </Text>
-        <TouchableOpacity onPress={() => onRefresh()}>
-          <MaterialCommunityIcons name="refresh" size={24} color={isDark ? '#48BB78' : '#2F855A'} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {isDemoMode && (
+            <TouchableOpacity
+              onPress={toggleDemoMode}
+              style={{ padding: 4 }}
+            >
+              <MaterialCommunityIcons name="beaker" size={24} color={isDark ? '#F6AD55' : '#ED8936'} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => onRefresh()}>
+            <MaterialCommunityIcons name="refresh" size={24} color={isDark ? '#48BB78' : '#2F855A'} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <TabNavigation />
@@ -1067,6 +1259,48 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
     fontStyle: 'italic',
+  },
+  demoCard: {
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#ED8936',
+  },
+  demoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  demoTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    flex: 1,
+    marginLeft: 8,
+  },
+  demoText: {
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  demoButtonsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  demoButton: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  demoButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 

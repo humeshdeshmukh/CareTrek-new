@@ -18,6 +18,7 @@ import ErrorBoundary, { DefaultFallback } from './src/components/ErrorBoundary';
 import type { RootStackParamList } from './src/navigation/RootNavigator';
 import { useAppSelector } from './src/store/hooks';
 import RootNavigator from './src/navigation/RootNavigator';
+import { permissionService } from './src/services/permissionService';
 
 declare global {
   namespace ReactNavigation {
@@ -87,6 +88,10 @@ export default function AppWrapper() {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         // Clear the persisted root state which includes auth
         await AsyncStorage.removeItem('persist:root');
+        
+        // Request necessary permissions on app startup
+        await permissionService.requestAllPermissions();
+        
         setIsReady(true);
       } catch (error) {
         console.error('Error clearing persisted state:', error);

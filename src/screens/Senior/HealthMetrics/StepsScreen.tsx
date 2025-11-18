@@ -9,8 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Dimensions,
-  PermissionsAndroid,
-  Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../../contexts/theme/ThemeContext';
@@ -18,6 +17,7 @@ import { useBLEWatch } from '../../../hooks/useBLEWatch';
 import { LineChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics } from '../../../services/healthDataService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -32,6 +32,9 @@ const StepsScreen: React.FC<any> = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [dailyGoal] = useState(10000);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
 
   // Get current user
   useEffect(() => {
@@ -63,11 +66,29 @@ const StepsScreen: React.FC<any> = ({ navigation }) => {
     loadMetrics();
   }, [loadMetrics]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await syncDeviceData();
       await loadMetrics();
+      setCacheKey(prev => prev + 1);
     } finally {
       setRefreshing(false);
     }
@@ -75,28 +96,12 @@ const StepsScreen: React.FC<any> = ({ navigation }) => {
 
   const handleMeasure = async () => {
     try {
-      // Request activity recognition permission on Android
-      if (Platform.OS === 'android' && Platform.Version >= 29) {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
-          {
-            title: 'Activity Recognition Permission',
-            message: 'This app needs access to your activity data to track steps',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          },
-        );
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          console.log('Activity recognition permission denied');
-          return;
-        }
-      }
-
+      // Simply sync - permission is already requested on app startup
       await syncDeviceData();
       await loadMetrics();
     } catch (error) {
       console.error('Error measuring:', error);
+      Alert.alert('Error', 'Failed to sync data from watch. Please try again.');
     }
   };
 
@@ -111,7 +116,9 @@ const StepsScreen: React.FC<any> = ({ navigation }) => {
     ],
   };
 
-  const currentSteps = watchData.steps || metrics[0]?.steps || 0;
+  const currentSteps = isDemoMode && demoData
+    ? demoData.steps
+    : watchData.steps || metrics[0]?.steps || 0;
   const totalSteps = metrics.length > 0
     ? metrics.reduce((sum, m) => sum + (m.steps || 0), 0)
     : 0;

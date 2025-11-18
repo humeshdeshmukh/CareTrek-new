@@ -16,6 +16,7 @@ import { useBLEWatch } from '../../../hooks/useBLEWatch';
 import { LineChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics } from '../../../services/healthDataService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -30,6 +31,9 @@ const CaloriesScreen: React.FC<any> = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [dailyGoal] = useState(2000);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
 
   // Get current user
   useEffect(() => {
@@ -48,7 +52,7 @@ const CaloriesScreen: React.FC<any> = ({ navigation }) => {
     try {
       setLoading(true);
       const data = await getUserHealthMetrics(userId, 30);
-      const caloriesData = data.filter(m => m.calories).slice(0, 7);
+      const caloriesData = data.filter(m => m.calories_burned).slice(0, 7);
       setMetrics(caloriesData);
     } catch (error) {
       console.error('Error loading metrics:', error);
@@ -61,11 +65,29 @@ const CaloriesScreen: React.FC<any> = ({ navigation }) => {
     loadMetrics();
   }, [loadMetrics]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await syncDeviceData();
       await loadMetrics();
+      setCacheKey(prev => prev + 1);
     } finally {
       setRefreshing(false);
     }
@@ -84,22 +106,24 @@ const CaloriesScreen: React.FC<any> = ({ navigation }) => {
     labels: metrics.map(m => dayjs(m.timestamp).format('MMM DD')).reverse(),
     datasets: [
       {
-        data: metrics.map(m => m.calories || 0).reverse(),
+        data: metrics.map(m => m.calories_burned || 0).reverse(),
         color: () => '#FF9800',
         strokeWidth: 2,
       },
     ],
   };
 
-  const currentCalories = watchData.calories || metrics[0]?.calories || 0;
+  const currentCalories = isDemoMode && demoData
+    ? demoData.calories
+    : watchData.calories || metrics[0]?.calories_burned || 0;
   const totalCalories = metrics.length > 0
-    ? metrics.reduce((sum, m) => sum + (m.calories || 0), 0)
+    ? metrics.reduce((sum, m) => sum + (m.calories_burned || 0), 0)
     : 0;
   const avgCalories = metrics.length > 0
     ? Math.round(totalCalories / metrics.length)
     : 0;
   const maxCalories = metrics.length > 0
-    ? Math.max(...metrics.map(m => m.calories || 0))
+    ? Math.max(...metrics.map(m => m.calories_burned || 0))
     : 0;
   const goalProgress = Math.min((currentCalories / dailyGoal) * 100, 100);
 

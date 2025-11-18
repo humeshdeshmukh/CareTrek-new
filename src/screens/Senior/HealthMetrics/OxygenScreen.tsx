@@ -16,6 +16,7 @@ import { useBLEWatch } from '../../../hooks/useBLEWatch';
 import { LineChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics } from '../../../services/healthDataService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -29,6 +30,9 @@ const OxygenScreen: React.FC<any> = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
 
   // Get current user
   useEffect(() => {
@@ -47,7 +51,7 @@ const OxygenScreen: React.FC<any> = ({ navigation }) => {
     try {
       setLoading(true);
       const data = await getUserHealthMetrics(userId, 30);
-      const oxygenData = data.filter(m => m.oxygen_saturation).slice(0, 7);
+      const oxygenData = data.filter(m => m.blood_oxygen).slice(0, 7);
       setMetrics(oxygenData);
     } catch (error) {
       console.error('Error loading metrics:', error);
@@ -60,11 +64,39 @@ const OxygenScreen: React.FC<any> = ({ navigation }) => {
     loadMetrics();
   }, [loadMetrics]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
+    const tData = {
+      labels: metrics.map(m => dayjs(m.timestamp).format('MMM DD')).reverse(),
+      datasets: [
+        {
+          data: metrics.map(m => m.blood_oxygen || 0).reverse(),
+          color: () => '#2196F3',
+          strokeWidth: 2,
+        },
+      ],
+    };
     setRefreshing(true);
     try {
       await syncDeviceData();
       await loadMetrics();
+      setCacheKey(prev => prev + 1);
     } finally {
       setRefreshing(false);
     }
@@ -83,22 +115,24 @@ const OxygenScreen: React.FC<any> = ({ navigation }) => {
     labels: metrics.map(m => dayjs(m.timestamp).format('MMM DD')).reverse(),
     datasets: [
       {
-        data: metrics.map(m => m.oxygen_saturation || 0).reverse(),
+        data: metrics.map(m => m.blood_oxygen || 0).reverse(),
         color: () => '#2196F3',
         strokeWidth: 2,
       },
     ],
   };
 
-  const currentOxygen = watchData.oxygenSaturation || metrics[0]?.oxygen_saturation || 0;
+  const currentOxygen = isDemoMode && demoData
+    ? demoData.oxygenSaturation
+    : watchData.oxygenSaturation || metrics[0]?.blood_oxygen || 0;
   const avgOxygen = metrics.length > 0
-    ? Number((metrics.reduce((sum, m) => sum + (m.oxygen_saturation || 0), 0) / metrics.length).toFixed(1))
+    ? Number((metrics.reduce((sum, m) => sum + (m.blood_oxygen || 0), 0) / metrics.length).toFixed(1))
     : 0;
   const maxOxygen = metrics.length > 0
-    ? Math.max(...metrics.map(m => m.oxygen_saturation || 0))
+    ? Math.max(...metrics.map(m => m.blood_oxygen || 0))
     : 0;
   const minOxygen = metrics.length > 0
-    ? Math.min(...metrics.filter(m => m.oxygen_saturation).map(m => m.oxygen_saturation || 0))
+    ? Math.min(...metrics.filter(m => m.blood_oxygen).map(m => m.blood_oxygen || 0))
     : 0;
 
   // Determine oxygen status

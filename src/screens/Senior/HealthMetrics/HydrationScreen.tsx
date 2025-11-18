@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../../contexts/theme/ThemeContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getHydrationSummary, addHydrationEntry, getTodayHydrationRecord } from '../../../services/hydrationTrackingService';
+import { demoModeService } from '../../../services/demoModeService';
 import { supabase } from '../../../lib/supabase';
 import dayjs from 'dayjs';
 
@@ -29,6 +30,9 @@ const HydrationScreen: React.FC<any> = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [demoData, setDemoData] = useState<any>(null);
+  const [cacheKey, setCacheKey] = useState(0);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedAmount, setSelectedAmount] = useState('250');
   const [selectedType, setSelectedType] = useState<'water' | 'juice' | 'tea' | 'coffee' | 'milk' | 'other'>('water');
@@ -76,10 +80,28 @@ const HydrationScreen: React.FC<any> = ({ navigation }) => {
     loadHydrationData();
   }, [loadHydrationData]);
 
+  // Check demo mode
+  useEffect(() => {
+    const checkDemo = async () => {
+      try {
+        const isActive = demoModeService.isActive();
+        setIsDemoMode(isActive);
+        if (isActive) {
+          const data = demoModeService.getMockData();
+          setDemoData(data);
+        }
+      } catch (error) {
+        console.warn('Demo mode check error:', error);
+      }
+    };
+    checkDemo();
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await loadHydrationData();
+      setCacheKey(prev => prev + 1);
     } finally {
       setRefreshing(false);
     }
@@ -101,12 +123,19 @@ const HydrationScreen: React.FC<any> = ({ navigation }) => {
     }
   };
 
-  const goalProgress = todayRecord
-    ? Math.min((todayRecord.water_intake / todayRecord.goal) * 100, 100)
+  const displayTodayRecord = isDemoMode && demoData?.hydration
+    ? {
+        water_intake: demoData.hydration.waterIntake,
+        goal: 2000,
+      }
+    : todayRecord;
+
+  const goalProgress = displayTodayRecord
+    ? Math.min((displayTodayRecord.water_intake / displayTodayRecord.goal) * 100, 100)
     : 0;
 
-  const remaining = todayRecord
-    ? Math.max(todayRecord.goal - todayRecord.water_intake, 0)
+  const remaining = displayTodayRecord
+    ? Math.max(displayTodayRecord.goal - displayTodayRecord.water_intake, 0)
     : 2000;
 
   return (

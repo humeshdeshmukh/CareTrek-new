@@ -27,30 +27,27 @@ const deviceIdToUUID = (deviceId: string): string => {
   ].join('-');
 };
 
-// Interface for the health metrics data
+// Interface for the health metrics data - matches Supabase schema
 export interface HealthMetric {
   id?: string;
   user_id: string;
-  device_id: string;
-  device_name: string;
-  device_type: string;
   heart_rate?: number;
-  steps?: number;
-  battery?: number;
-  oxygen_saturation?: number;
   blood_pressure_systolic?: number;
   blood_pressure_diastolic?: number;
-  calories?: number;
-  sleep_duration?: number;
-  sleep_quality?: string;
-  deep_sleep?: number;
-  light_sleep?: number;
-  rem_sleep?: number;
-  awake_time?: number;
-  water_intake?: number;
-  hydration_goal?: number;
-  timestamp: string;
+  blood_oxygen?: number;
+  temperature?: number;
+  steps?: number;
+  calories_burned?: number;
+  sleep_duration_minutes?: number;
+  recorded_at?: string;
   created_at?: string;
+  updated_at?: string;
+  battery?: number;
+  device_id?: string;
+  device_name?: string;
+  rssi?: number;
+  device_type?: string;
+  timestamp: string;
 }
 
 // Save health metrics to Supabase
@@ -70,7 +67,7 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
     // Convert device ID to UUID format if it's not already a valid UUID
     const deviceIdValue = deviceData.deviceId.includes('-') ? deviceData.deviceId : deviceIdToUUID(deviceData.deviceId);
     
-    const metric: Omit<HealthMetric, 'id' | 'created_at'> = {
+    const metric: Omit<HealthMetric, 'id' | 'created_at' | 'updated_at'> = {
       user_id: userId,
       device_id: deviceIdValue,
       device_name: deviceData.deviceName || 'Unknown Device',
@@ -78,11 +75,12 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
       heart_rate: deviceData.heartRate,
       steps: deviceData.steps,
       battery: deviceData.battery,
-      oxygen_saturation: deviceData.oxygenSaturation, // Maps to blood_oxygen in DB
+      blood_oxygen: deviceData.oxygenSaturation, // Maps to blood_oxygen in DB
       blood_pressure_systolic: deviceData.bloodPressure?.systolic,
       blood_pressure_diastolic: deviceData.bloodPressure?.diastolic,
-      calories: deviceData.calories,
+      calories_burned: deviceData.calories,
       timestamp: deviceData.lastUpdated ? new Date(deviceData.lastUpdated).toISOString() : now,
+      rssi: deviceData.rssi || undefined,
     };
 
     const { data, error } = await supabase
@@ -142,12 +140,18 @@ export const getHealthSummary = async (userId: string, days = 7): Promise<any> =
 
     if (data && data.length > 0) {
       const heartRates = data.filter(d => d.heart_rate).map(d => d.heart_rate);
-      const oxygenLevels = data.filter(d => d.oxygen_saturation).map(d => d.oxygen_saturation);
+      const oxygenLevels = data.filter(d => d.blood_oxygen).map(d => d.blood_oxygen);
       const steps = data.filter(d => d.steps).map(d => d.steps);
 
-      summary.averageHeartRate = Math.round(heartRates.reduce((a, b) => a + b, 0) / heartRates.length);
-      summary.totalSteps = steps.reduce((a, b) => a + b, 0);
-      summary.averageOxygen = Number((oxygenLevels.reduce((a, b) => a + b, 0) / oxygenLevels.length).toFixed(1));
+      if (heartRates.length > 0) {
+        summary.averageHeartRate = Math.round(heartRates.reduce((a, b) => a + b, 0) / heartRates.length);
+      }
+      if (steps.length > 0) {
+        summary.totalSteps = steps.reduce((a, b) => a + b, 0);
+      }
+      if (oxygenLevels.length > 0) {
+        summary.averageOxygen = Number((oxygenLevels.reduce((a, b) => a + b, 0) / oxygenLevels.length).toFixed(1));
+      }
     }
 
     return summary;
