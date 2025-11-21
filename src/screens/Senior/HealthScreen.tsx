@@ -15,7 +15,7 @@ import {
   Linking
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useTheme } from '../../contexts/theme/ThemeContext';
@@ -60,35 +60,107 @@ const HealthScreen = () => {
     mobileSensorService,
   } = useBLEWatchV2();
 
-  // Merge mobile sensor data with watch data
-  const [displayData, setDisplayData] = useState(watchData);
+  // Merge mobile sensor data with watch data - PRODUCTION LEVEL
+  const [displayData, setDisplayData] = useState<any>({
+    status: 'disconnected',
+    heartRate: undefined,
+    steps: 0,
+    calories: 0,
+    oxygenSaturation: undefined,
+  });
 
-  // Merge mobile sensor data with watch data
+  // Merge mobile sensor data with watch data - PRODUCTION LEVEL
+  // Safe state updates with error handling - works even if component unmounts
   useEffect(() => {
-    if (mobileSensorService) {
-      const mobileData = mobileSensorService.getTodayData();
-      const merged = {
-        ...watchData,
-        // Use mobile sensor data if watch doesn't have it
-        steps: watchData?.steps || mobileData.steps || 0,
-        calories: watchData?.calories || mobileData.calories || 0,
-      };
-      setDisplayData(merged);
-      
-      console.log('[HealthScreen] Merged data:', {
-        status: merged?.status,
-        heartRate: merged?.heartRate,
-        steps: merged?.steps,
-        calories: merged?.calories,
-        oxygenSaturation: merged?.oxygenSaturation,
-        battery: merged?.battery,
-      });
-    } else {
-      setDisplayData(watchData);
-    }
+    let isMounted = true;
+
+    const mergeData = async () => {
+      try {
+        if (!isMounted) return;
+        
+        console.log('[HealthScreen] watchData received:', {
+          status: watchData?.status,
+          heartRate: watchData?.heartRate,
+          steps: watchData?.steps,
+          calories: watchData?.calories,
+          oxygenSaturation: watchData?.oxygenSaturation,
+          bloodPressure: watchData?.bloodPressure,
+          sleepData: watchData?.sleepData,
+          battery: watchData?.battery,
+        });
+        
+        if (!mobileSensorService) {
+          console.log('[HealthScreen] Mobile sensor service not available');
+          if (isMounted) {
+            setDisplayData((prev: any) => ({
+              ...prev,
+              ...watchData,
+            }));
+          }
+          return;
+        }
+
+        const mobileData = mobileSensorService.getTodayData?.() || { steps: 0, calories: 0 };
+        
+        // Show watch data, but use mobile sensor as fallback for steps/calories only
+        const merged = {
+          status: watchData?.status || 'disconnected',
+          heartRate: watchData?.heartRate !== undefined ? watchData.heartRate : undefined,
+          steps: watchData?.steps !== undefined && watchData.steps > 0 ? watchData.steps : (mobileData?.steps || 0),
+          calories: watchData?.calories !== undefined && watchData.calories > 0 ? watchData.calories : (mobileData?.calories || 0),
+          oxygenSaturation: watchData?.oxygenSaturation !== undefined ? watchData.oxygenSaturation : undefined,
+          bloodPressure: watchData?.bloodPressure !== undefined ? watchData.bloodPressure : undefined,
+          sleepData: watchData?.sleepData !== undefined ? watchData.sleepData : undefined,
+          deviceName: watchData?.deviceName,
+          deviceId: watchData?.deviceId,
+          lastUpdated: watchData?.lastUpdated,
+          battery: watchData?.battery !== undefined ? watchData.battery : undefined,
+          hydration: watchData?.hydration !== undefined ? watchData.hydration : undefined,
+        };
+        
+        console.log('[HealthScreen] Watch data with mobile fallback for steps/calories:', {
+          watchHeartRate: watchData?.heartRate,
+          watchSteps: watchData?.steps,
+          watchCalories: watchData?.calories,
+          mobileSteps: mobileData?.steps,
+          mobileCalories: mobileData?.calories,
+          finalHeartRate: merged.heartRate,
+          finalSteps: merged.steps,
+          finalCalories: merged.calories,
+        });
+
+        if (isMounted) {
+          setDisplayData(merged);
+          console.log('[HealthScreen] displayData updated:', merged);
+        }
+        
+        console.log('[HealthScreen] Data merged:', {
+          status: merged.status,
+          heartRate: merged.heartRate,
+          steps: merged.steps,
+          calories: merged.calories,
+          oxygenSaturation: merged.oxygenSaturation,
+          battery: merged.battery,
+        });
+      } catch (err) {
+        console.error('[HealthScreen] Error merging data:', err);
+        if (isMounted) {
+          try {
+            setDisplayData((prev: any) => ({ ...prev, ...watchData }));
+          } catch (setErr) {
+            console.error('[HealthScreen] Error setting fallback data:', setErr);
+          }
+        }
+      }
+    };
+
+    mergeData();
+
+    return () => {
+      isMounted = false;
+    };
   }, [watchData, mobileSensorService]);
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'cardio' | 'activity' | 'wellness'>('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [showDeviceModal, setShowDeviceModal] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -96,6 +168,7 @@ const HealthScreen = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSyncingBackground, setIsSyncingBackground] = useState(false);
   const [backgroundMetricsCount, setBackgroundMetricsCount] = useState(0);
+  const [isWaitingForData, setIsWaitingForData] = useState(false);
   const isMountedRef = useRef(true);
 
   const STORAGE_KEY = 'previouslyConnectedDevices';
@@ -180,11 +253,54 @@ const HealthScreen = () => {
   }, [userId]);
 
 
+  // Cleanup on component unmount - PRODUCTION LEVEL
+  // CRITICAL: Don't set isMountedRef to false - it causes watch disconnection
   useEffect(() => {
+    console.log('[HealthScreen] Component mounted');
+
     return () => {
-      isMountedRef.current = false;
+      try {
+        console.log('[HealthScreen] Component unmounting - keeping watch connection alive');
+        // CRITICAL: Don't modify isMountedRef here!
+        // This is managed by individual useEffect hooks with local isMounted flags
+        // Setting isMountedRef to false here causes the watch to disconnect
+        
+        // Stop any pending operations
+        setRefreshing(false);
+        setShowDeviceModal(false);
+        setIsSyncingBackground(false);
+      } catch (err) {
+        console.error('[HealthScreen] Unmount cleanup error:', err);
+      }
     };
   }, []);
+
+  // Navigation-level cleanup - PRODUCTION LEVEL FIX
+  // IMPORTANT: Don't disconnect watch when navigating away
+  // Only manage UI state, not connection state
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        console.log('[HealthScreen] useFocusEffect - Screen focused');
+        isMountedRef.current = true;
+
+        return () => {
+          try {
+            console.log('[HealthScreen] useFocusEffect cleanup - Screen blurred (keeping connection alive)');
+            // CRITICAL: Don't set isMountedRef to false here!
+            // This prevents state updates but ALSO causes watch to disconnect
+            // Instead, we'll handle state updates safely with try-catch
+            // isMountedRef.current = false; // REMOVED - causes watch disconnection
+          } catch (err) {
+            console.error('[HealthScreen] useFocusEffect cleanup error:', err);
+          }
+        };
+      } catch (err) {
+        console.error('[HealthScreen] useFocusEffect error:', err);
+        return () => {};
+      }
+    }, [])
+  );
 
   // Monitor connection state changes (new feature from useBLEWatchV2)
   useEffect(() => {
@@ -193,11 +309,12 @@ const HealthScreen = () => {
     const unsubscribe = bleService.onStateChange((state) => {
       console.log('[HealthScreen] BLE connection state:', state);
       
-      // Optional: Show toast or alert for important state changes
-      if (state === 'reconnecting') {
-        console.log('[HealthScreen] Watch is reconnecting...');
-      } else if (state === 'error') {
-        console.log('[HealthScreen] BLE connection error');
+      // Set waiting for data when connected
+      if (state === 'connected') {
+        setIsWaitingForData(true);
+        console.log('[HealthScreen] Connected - waiting for data from watch...');
+      } else if (state === 'disconnected' || state === 'error') {
+        setIsWaitingForData(false);
       }
     });
 
@@ -205,6 +322,14 @@ const HealthScreen = () => {
       unsubscribe();
     };
   }, [bleService]);
+
+  // Monitor when data arrives
+  useEffect(() => {
+    if (watchData?.heartRate !== undefined || watchData?.steps !== undefined || watchData?.calories !== undefined) {
+      setIsWaitingForData(false);
+      console.log('[HealthScreen] Data received from watch - stop waiting');
+    }
+  }, [watchData?.heartRate, watchData?.steps, watchData?.calories]);
 
   useEffect(() => {
     const getUser = async () => {
@@ -282,39 +407,6 @@ const HealthScreen = () => {
     }
   }, [watchData?.status, disconnectDevice, startScan]);
 
-  // Tab Navigation Component
-  const TabNavigation = () => (
-    <View style={[styles.tabContainer, { backgroundColor: isDark ? '#0F1724' : '#F8FAFC', borderBottomColor: isDark ? '#2D3748' : '#E2E8F0' }]}>
-      {[
-        { id: 'overview', label: 'Overview', icon: 'view-dashboard' },
-        { id: 'cardio', label: 'Cardio', icon: 'heart-pulse' },
-        { id: 'activity', label: 'Activity', icon: 'run' },
-        { id: 'wellness', label: 'Wellness', icon: 'spa' }
-      ].map((tab) => (
-        <TouchableOpacity
-          key={tab.id}
-          style={[
-            styles.tab,
-            activeTab === tab.id && [styles.activeTab, { borderBottomColor: isDark ? '#48BB78' : '#2F855A' }]
-          ]}
-          onPress={() => setActiveTab(tab.id as any)}
-        >
-          <MaterialCommunityIcons
-            name={tab.icon as any}
-            size={20}
-            color={activeTab === tab.id ? (isDark ? '#48BB78' : '#2F855A') : (isDark ? '#A0AEC0' : '#94A3B8')}
-          />
-          <Text style={[
-            styles.tabLabel,
-            { color: activeTab === tab.id ? (isDark ? '#48BB78' : '#2F855A') : (isDark ? '#A0AEC0' : '#94A3B8') }
-          ]}>
-            {tab.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-
   // Device Connection Card - Stable rendering from old file
   const renderDeviceCard = () => (
     <View style={[styles.deviceCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
@@ -379,7 +471,7 @@ const HealthScreen = () => {
     </View>
   );
 
-  // Metric Card Component
+  // Metric Card Component - Safe rendering with error handling
   const MetricCard = ({ 
     icon, 
     label, 
@@ -396,38 +488,51 @@ const HealthScreen = () => {
     color: string;
     status: string;
     onPress: () => void;
-  }) => (
-    <TouchableOpacity
-      style={[styles.metricCard, { backgroundColor: isDark ? '#1A202C' : '#FFFFFF' }]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <View style={[styles.metricIconBg, { backgroundColor: `${color}20` }]}>
-        <MaterialCommunityIcons name={icon as any} size={28} color={color} />
-      </View>
-      <View style={styles.metricContent}>
-        <Text style={[styles.metricLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-          {label}
-        </Text>
-        <View style={styles.metricValueRow}>
-          <Text style={[styles.metricValue, { color }]}>
-            {value}
-          </Text>
-          <Text style={[styles.metricUnit, { color: isDark ? '#94A3B8' : '#94A3B8' }]}>
-            {unit}
-          </Text>
-        </View>
-        <Text style={[styles.metricStatus, { color: isDark ? '#A0AEC0' : '#94A3B8' }]}>
-          {status}
-        </Text>
-      </View>
-      <MaterialCommunityIcons
-        name="chevron-right"
-        size={20}
-        color={isDark ? '#404854' : '#CBD5E0'}
-      />
-    </TouchableOpacity>
-  );
+  }) => {
+    try {
+      return (
+        <TouchableOpacity
+          style={[styles.metricCard, { backgroundColor: isDark ? '#1A202C' : '#FFFFFF' }]}
+          onPress={() => {
+            try {
+              onPress();
+            } catch (err) {
+              console.error('[HealthScreen] MetricCard press error:', err);
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.metricIconBg, { backgroundColor: `${color}20` }]}>
+            <MaterialCommunityIcons name={icon as any} size={28} color={color} />
+          </View>
+          <View style={styles.metricContent}>
+            <Text style={[styles.metricLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+              {label}
+            </Text>
+            <View style={styles.metricValueRow}>
+              <Text style={[styles.metricValue, { color }]}>
+                {String(value || '--')}
+              </Text>
+              <Text style={[styles.metricUnit, { color: isDark ? '#94A3B8' : '#94A3B8' }]}>
+                {unit}
+              </Text>
+            </View>
+            <Text style={[styles.metricStatus, { color: isDark ? '#A0AEC0' : '#94A3B8' }]}>
+              {String(status || 'No data')}
+            </Text>
+          </View>
+          <MaterialCommunityIcons
+            name="chevron-right"
+            size={20}
+            color={isDark ? '#404854' : '#CBD5E0'}
+          />
+        </TouchableOpacity>
+      );
+    } catch (err) {
+      console.error('[HealthScreen] MetricCard render error:', err);
+      return null;
+    }
+  };
 
   // Overview Tab
   const renderOverviewTab = () => (
@@ -452,9 +557,13 @@ const HealthScreen = () => {
             status={displayData?.heartRate ? 'Normal' : 'No data'}
             onPress={() => {
               try {
-                navigation.navigate('HeartRate');
+                Alert.alert(
+                  'Heart Rate',
+                  displayData?.heartRate ? `Current: ${displayData.heartRate} BPM` : 'No data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
               } catch (e) {
-                console.error('[HealthScreen] Navigation error:', e);
+                console.error('[HealthScreen] Alert error:', e);
               }
             }}
           />
@@ -465,7 +574,17 @@ const HealthScreen = () => {
             unit="steps"
             color="#4CAF50"
             status={displayData?.steps ? `${Math.round((displayData.steps / 10000) * 100)}% goal` : 'No data'}
-            onPress={() => navigation.navigate('Steps')}
+            onPress={() => {
+              try {
+                Alert.alert(
+                  'Steps',
+                  displayData?.steps ? `Today: ${displayData.steps} steps\nGoal: 10,000 steps\nProgress: ${Math.round((displayData.steps / 10000) * 100)}%` : 'No data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
+              } catch (e) {
+                console.error('[HealthScreen] Alert error:', e);
+              }
+            }}
           />
         </View>
 
@@ -477,7 +596,17 @@ const HealthScreen = () => {
             unit="%"
             color="#2196F3"
             status={displayData?.oxygenSaturation ? 'Good' : 'No data'}
-            onPress={() => navigation.navigate('Oxygen')}
+            onPress={() => {
+              try {
+                Alert.alert(
+                  'Oxygen Saturation',
+                  displayData?.oxygenSaturation ? `Current: ${displayData.oxygenSaturation}%\n${displayData.oxygenSaturation >= 95 ? 'Excellent' : 'Normal'}` : 'No data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
+              } catch (e) {
+                console.error('[HealthScreen] Alert error:', e);
+              }
+            }}
           />
           <MetricCard
             icon="heart-pulse"
@@ -486,7 +615,19 @@ const HealthScreen = () => {
             unit="mmHg"
             color="#E91E63"
             status={displayData?.bloodPressure ? 'Normal' : 'No data'}
-            onPress={() => navigation.navigate('BloodPressure')}
+            onPress={() => {
+              try {
+                Alert.alert(
+                  'Blood Pressure',
+                  displayData?.bloodPressure && displayData.bloodPressure.systolic && displayData.bloodPressure.diastolic
+                    ? `Systolic: ${displayData.bloodPressure.systolic} mmHg\nDiastolic: ${displayData.bloodPressure.diastolic} mmHg`
+                    : 'No data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
+              } catch (e) {
+                console.error('[HealthScreen] Alert error:', e);
+              }
+            }}
           />
         </View>
 
@@ -498,7 +639,17 @@ const HealthScreen = () => {
             unit="kcal"
             color="#FF9800"
             status={displayData?.calories ? `${Math.round((displayData.calories / 2000) * 100)}% goal` : 'No data'}
-            onPress={() => navigation.navigate('Calories')}
+            onPress={() => {
+              try {
+                Alert.alert(
+                  'Calories',
+                  displayData?.calories ? `Today: ${displayData.calories} kcal\nGoal: 2,000 kcal\nProgress: ${Math.round((displayData.calories / 2000) * 100)}%` : 'No data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
+              } catch (e) {
+                console.error('[HealthScreen] Alert error:', e);
+              }
+            }}
           />
           <MetricCard
             icon="moon-waning-crescent"
@@ -507,19 +658,21 @@ const HealthScreen = () => {
             unit="duration"
             color="#9C27B0"
             status={displayData?.sleepData?.quality || 'No data'}
-            onPress={() => navigation.navigate('Sleep')}
+            onPress={() => {
+              try {
+                Alert.alert(
+                  'Sleep',
+                  displayData?.sleepData && displayData.sleepData.duration
+                    ? `Duration: ${Math.floor(displayData.sleepData.duration / 60)}h\nQuality: ${displayData.sleepData.quality || 'Not tracked'}`
+                    : 'No sleep data available',
+                  [{ text: 'OK', style: 'default' }]
+                );
+              } catch (e) {
+                console.error('[HealthScreen] Alert error:', e);
+              }
+            }}
           />
         </View>
-
-        <MetricCard
-          icon="water"
-          label="Hydration"
-          value={displayData?.hydration?.waterIntake || '--'}
-          unit="ml"
-          color="#2196F3"
-          status={displayData?.hydration ? `${Math.round((displayData.hydration.waterIntake / 2000) * 100)}% goal` : 'No data'}
-          onPress={() => navigation.navigate('Hydration')}
-        />
       </View>
 
       {/* Battery Display - Keep watch battery visible */}
@@ -600,117 +753,7 @@ const HealthScreen = () => {
     </ScrollView>
   );
 
-  // Cardio Tab
-  const renderCardioTab = () => (
-    <ScrollView
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      <MetricCard
-        icon="heart"
-        label="Heart Rate"
-        value={watchData?.heartRate || '--'}
-        unit="BPM"
-        color="#FF6B6B"
-        status={watchData?.heartRate ? 'Normal' : 'No data'}
-        onPress={() => navigation.navigate('HeartRate')}
-      />
-      <MetricCard
-        icon="heart-pulse"
-        label="Blood Pressure"
-        value={watchData?.bloodPressure ? `${watchData.bloodPressure.systolic}/${watchData.bloodPressure.diastolic}` : '--'}
-        unit="mmHg"
-        color="#E91E63"
-        status={watchData?.bloodPressure ? 'Normal' : 'No data'}
-        onPress={() => navigation.navigate('BloodPressure')}
-      />
-      <MetricCard
-        icon="lungs"
-        label="Blood Oxygen"
-        value={watchData?.oxygenSaturation || '--'}
-        unit="%"
-        color="#2196F3"
-        status={watchData?.oxygenSaturation ? 'Excellent' : 'No data'}
-        onPress={() => navigation.navigate('Oxygen')}
-      />
-    </ScrollView>
-  );
 
-  // Activity Tab
-  const renderActivityTab = () => (
-    <ScrollView
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      <MetricCard
-        icon="walk"
-        label="Steps"
-        value={watchData?.steps || '--'}
-        unit="steps"
-        color="#4CAF50"
-        status={watchData?.steps ? `${Math.round((watchData.steps / 10000) * 100)}% goal` : 'No data'}
-        onPress={() => navigation.navigate('Steps')}
-      />
-      <MetricCard
-        icon="fire"
-        label="Calories"
-        value={watchData?.calories || '--'}
-        unit="kcal"
-        color="#FF9800"
-        status={watchData?.calories ? `${Math.round((watchData.calories / 2000) * 100)}% goal` : 'No data'}
-        onPress={() => navigation.navigate('Calories')}
-      />
-    </ScrollView>
-  );
-
-  // Wellness Tab
-  const renderWellnessTab = () => (
-    <ScrollView
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      <MetricCard
-        icon="moon-waning-crescent"
-        label="Sleep"
-        value={watchData?.sleepData ? `${Math.floor(watchData.sleepData.duration / 60)}h` : '--'}
-        unit="duration"
-        color="#9C27B0"
-        status={watchData?.sleepData?.quality || 'No data'}
-        onPress={() => navigation.navigate('Sleep')}
-      />
-      <MetricCard
-        icon="water"
-        label="Hydration"
-        value={watchData?.hydration?.waterIntake || '--'}
-        unit="ml"
-        color="#2196F3"
-        status={watchData?.hydration ? `${Math.round((watchData.hydration.waterIntake / 2000) * 100)}% goal` : 'No data'}
-        onPress={() => navigation.navigate('Hydration')}
-      />
-      <MetricCard
-        icon="battery"
-        label="Device Battery"
-        value={watchData?.battery || '--'}
-        unit="%"
-        color={watchData?.battery && watchData.battery < 20 ? '#E53E3E' : '#48BB78'}
-        status={watchData?.battery && watchData.battery < 20 ? 'Low' : 'Good'}
-        onPress={() => {}}
-      />
-    </ScrollView>
-  );
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'cardio':
-        return renderCardioTab();
-      case 'activity':
-        return renderActivityTab();
-      case 'wellness':
-        return renderWellnessTab();
-      default:
-        return renderOverviewTab();
-    }
-  };
 
   // Device Selection Modal - Memoized to prevent flickering
   const DeviceModal = useMemo(() => (
@@ -868,21 +911,34 @@ const HealthScreen = () => {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#0F1724' : '#F8FAFC' }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => {
+          try {
+            console.log('[HealthScreen] Back button pressed - navigating away (keeping connection alive)');
+            // CRITICAL: Don't set isMountedRef to false - it causes watch disconnection
+            // Just navigate back and let the component cleanup handle state updates
+            navigation.goBack();
+          } catch (err) {
+            console.error('[HealthScreen] Back button error:', err);
+          }
+        }}>
           <Ionicons name="arrow-back" size={24} color={isDark ? '#F8FAFC' : '#1E293B'} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
           Health Dashboard
         </Text>
-        <TouchableOpacity onPress={() => onRefresh()}>
+        <TouchableOpacity onPress={() => {
+          try {
+            onRefresh();
+          } catch (err) {
+            console.error('[HealthScreen] Refresh button error:', err);
+          }
+        }}>
           <MaterialCommunityIcons name="refresh" size={24} color={isDark ? '#48BB78' : '#2F855A'} />
         </TouchableOpacity>
       </View>
 
-      <TabNavigation />
-
       <View style={styles.content}>
-        {renderContent()}
+        {renderOverviewTab()}
       </View>
 
       {DeviceModal}
@@ -1232,6 +1288,65 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
     fontWeight: '600',
+  },
+  hydrationCard: {
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  hydrationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  hydrationTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  hydrationTitleText: {
+    flex: 1,
+  },
+  hydrationLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  hydrationValue: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  hydrationButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hydrationProgress: {
+    marginTop: 12,
+  },
+  hydrationProgressBar: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  hydrationProgressFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  hydrationGoal: {
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
 

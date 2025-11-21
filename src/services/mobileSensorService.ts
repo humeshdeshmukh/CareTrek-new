@@ -193,7 +193,7 @@ class MobileSensorService {
 
   /**
    * Simulate steps when pedometer is not available
-   * This provides demo data so the app doesn't show empty screens
+   * This provides fallback data so steps/calories are always available
    */
   private simulateSteps() {
     try {

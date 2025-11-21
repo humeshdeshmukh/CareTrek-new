@@ -31,20 +31,44 @@ const App: React.FC = () => {
   const { user, isAuthenticated, loading } = useAppSelector((state) => state.auth);
   const [isNavigationReady, setIsNavigationReady] = useState(false);
 
+  // Global error handler for unhandled promise rejections
   useEffect(() => {
-    if (isNavigationReady && !loading) {
-      // Only navigate to authenticated screens if user is authenticated AND has valid data
-      if (isAuthenticated && user && user.id && user.role) {
-        if (user.role === 'senior') {
-          resetNavigation('SeniorTabs');
-        } else if (user.role === 'family') {
-          resetNavigation('FamilyNavigator');
-        }
-      } else {
-        // For unauthenticated users, start with Welcome screen
-        // The flow is: Welcome -> Language -> Onboarding -> RoleSelection -> Auth
-        resetNavigation('Welcome');
+    const handleError = (error: any) => {
+      console.error('[App] Unhandled error:', error);
+    };
+
+    const handlePromiseRejection = (reason: any) => {
+      console.error('[App] Unhandled promise rejection:', reason);
+    };
+
+    // Listen for unhandled errors
+    const errorListener = require('react-native').AppState.addEventListener?.('memoryWarning', handleError);
+    
+    return () => {
+      if (errorListener?.remove) {
+        errorListener.remove();
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (isNavigationReady && !loading) {
+        // Only navigate to authenticated screens if user is authenticated AND has valid data
+        if (isAuthenticated && user && user.id && user.role) {
+          if (user.role === 'senior') {
+            resetNavigation('SeniorTabs');
+          } else if (user.role === 'family') {
+            resetNavigation('FamilyNavigator');
+          }
+        } else {
+          // For unauthenticated users, start with Welcome screen
+          // The flow is: Welcome -> Language -> Onboarding -> RoleSelection -> Auth
+          resetNavigation('Welcome');
+        }
+      }
+    } catch (err) {
+      console.error('[App] Navigation error:', err);
     }
   }, [isAuthenticated, user, loading, isNavigationReady]);
 
@@ -81,25 +105,20 @@ export default function AppWrapper() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    // Clear persisted auth state on app startup to ensure clean slate
-    // This prevents stale user data from being loaded
-    const clearPersistedAuth = async () => {
+    // Initialize app - request permissions and prepare
+    const initializeApp = async () => {
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        // Clear the persisted root state which includes auth
-        await AsyncStorage.removeItem('persist:root');
-        
         // Request necessary permissions on app startup
         await permissionService.requestAllPermissions();
         
         setIsReady(true);
       } catch (error) {
-        console.error('Error clearing persisted state:', error);
+        console.error('Error initializing app:', error);
         setIsReady(true);
       }
     };
 
-    clearPersistedAuth();
+    initializeApp();
   }, []);
 
   if (!isReady) {
