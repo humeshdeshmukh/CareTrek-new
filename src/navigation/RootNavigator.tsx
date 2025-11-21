@@ -32,6 +32,7 @@ import BloodPressureScreen from '../screens/Senior/HealthMetrics/BloodPressureSc
 import CaloriesScreen from '../screens/Senior/HealthMetrics/CaloriesScreen';
 import SleepScreen from '../screens/Senior/HealthMetrics/SleepScreen';
 import HydrationScreen from '../screens/Senior/HealthMetrics/HydrationScreen';
+import DebugScreen from '../screens/Senior/DebugScreen';
 
 // Import family screens
 import HomeScreenFamily from '../screens/family/HomeScreenFamily';
@@ -120,6 +121,7 @@ export type RootStackParamList = {
   Calories: undefined;
   Sleep: undefined;
   Hydration: undefined;
+  Debug: undefined;
 };
 
 // Import AuthStackParamList from types
@@ -360,6 +362,14 @@ const RootNavigator = () => {
       <Stack.Screen
         name="Hydration"
         component={HydrationScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="Debug"
+        component={DebugScreen}
         options={{
           headerShown: false,
         }}

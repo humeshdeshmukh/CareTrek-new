@@ -763,6 +763,20 @@ export const useBLEWatch = () => {
         return { serviceSet: new Set<string>(), charSet: new Set<string>(), svcToChars: new Map<string, CharFlags[]>() };
       });
 
+      // Log all characteristics for debugging (limit output)
+      const charCount = Array.from(svcToChars.values()).reduce((sum, chars) => sum + chars.length, 0);
+      console.log(`[BLE] Found ${svcToChars.size} services with ${charCount} total characteristics`);
+      
+      // Log only vendor services
+      for (const [svc, chars] of Array.from(svcToChars.entries())) {
+        if (!svc.startsWith('0000180') && !svc.startsWith('0000181')) {
+          console.log(`[BLE] Vendor Service: ${svc} (${chars.length} chars)`);
+          for (const c of chars.slice(0, 3)) {
+            console.log(`[BLE]   - ${c.uuid} (N:${c.isNotifiable} R:${c.isReadable} W:${c.isWritable})`);
+          }
+        }
+      }
+
       // read RSSI
       try {
         const rr: any = (connected as any).readRSSI ? await (connected as any).readRSSI() : null;
@@ -875,27 +889,55 @@ export const useBLEWatch = () => {
                 if (!characteristic?.value) return;
                 const parsed = parseGeneric(characteristic.value, svc, charU);
                 if (!parsed) return;
+                // Only log if we found data
+                console.log(`[BLE] Parsed from ${lowChar}: ${JSON.stringify(parsed)}`);
 
                 // map parsed outputs to stable updates
+                let dataUpdated = false;
                 if ((parsed as any).heartRate !== undefined) {
                   updateStableMetric('heartRate', (parsed as any).heartRate, 2);
                   backgroundDataService.addHeartRateReading((parsed as any).heartRate);
+                  dataUpdated = true;
                 }
                 if ((parsed as any).oxygenSaturation !== undefined) {
                   updateStableMetric('oxygenSaturation', (parsed as any).oxygenSaturation, 2);
                   backgroundDataService.addOxygenReading((parsed as any).oxygenSaturation);
+                  dataUpdated = true;
                 }
-                if ((parsed as any).bloodPressure !== undefined) updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
+                if ((parsed as any).bloodPressure !== undefined) {
+                  updateStableMetric('bloodPressure', (parsed as any).bloodPressure, 2);
+                  dataUpdated = true;
+                }
                 if ((parsed as any).steps !== undefined) {
                   const s = (parsed as any).steps;
                   if (typeof s === 'number' && s >= 0 && s < 1e8) {
                     updateStableMetric('steps', s, 2);
                     backgroundDataService.addStepsReading(s);
+                    dataUpdated = true;
                   }
                 }
                 if ((parsed as any).calories !== undefined) {
                   updateStableMetric('calories', (parsed as any).calories, 2);
                   backgroundDataService.addCaloriesReading((parsed as any).calories);
+                  dataUpdated = true;
+                }
+                
+                // Auto-sync when health data is received (only if device is connected and has name)
+                if (dataUpdated && watchData.status === 'connected' && watchData.deviceName && watchData.deviceId) {
+                  // Create sync data with current watchData + new parsed data
+                  const syncData = {
+                    ...watchData,
+                    ...parsed,
+                    lastUpdated: new Date()
+                  };
+                  console.log('[BLE] Auto-syncing data:', syncData);
+                  syncToSupabase(syncData).catch(e => console.warn('[BLE] Auto-sync error:', e));
+                } else if (dataUpdated) {
+                  console.log('[BLE] Skipping sync - incomplete device info:', { 
+                    status: watchData.status, 
+                    deviceName: watchData.deviceName, 
+                    deviceId: watchData.deviceId 
+                  });
                 }
                 if ((parsed as any).battery !== undefined) maybeUpdateBatteryLocal((parsed as any).battery, false);
               } catch (err) {
@@ -905,6 +947,32 @@ export const useBLEWatch = () => {
           }
         }
       } catch (e) { console.warn('Vendor monitors enumeration non-fatal', e); }
+
+      // Keep connection alive with periodic battery reads
+      const keepAliveInterval = setInterval(async () => {
+        if (!isMounted.current || !connectedDeviceRef.current) {
+          clearInterval(keepAliveInterval);
+          return;
+        }
+        try {
+          const batt = await connectedDeviceRef.current.readCharacteristicForService('180F', '2A19').catch(() => null);
+          if (batt?.value) {
+            const lvl = Buffer.from(batt.value, 'base64').readUInt8(0);
+            if (lvl >= 0 && lvl <= 100) {
+              updateStableMetric('battery', lvl, 2);
+            }
+          }
+        } catch (e) {
+          console.warn('[BLE] Keep-alive read failed - connection may be lost:', e);
+          // If keep-alive fails, the device likely disconnected
+          if (isMounted.current && watchData.status === 'connected') {
+            console.log('[BLE] Device disconnected detected');
+            safeSetWatchData({ status: 'disconnected' });
+          }
+        }
+      }, 10000); // Read every 10 seconds
+      
+      monitorsRef.current.push({ id: 'keepAlive', cancel: () => clearInterval(keepAliveInterval) });
 
       return true;
     } catch (error) {

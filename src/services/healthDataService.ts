@@ -83,13 +83,18 @@ export const saveHealthMetrics = async (userId: string, deviceData: WatchData): 
       rssi: deviceData.rssi || undefined,
     };
 
+    console.log('[HealthDataService] Saving metrics:', metric);
     const { data, error } = await supabase
       .from(HEALTH_METRICS_TABLE)
       .insert(metric)
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('[HealthDataService] Insert error:', error);
+      throw error;
+    }
+    console.log('[HealthDataService] Saved successfully:', data);
     return data;
   } catch (error) {
     console.error('Error saving health metrics:', error);

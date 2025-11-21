@@ -149,23 +149,33 @@ class BackgroundDataService {
    * Add heart rate reading to aggregation
    */
   addHeartRateReading(value: number) {
-    if (!this.aggregatedMetrics) {
-      this.aggregatedMetrics = {
-        heartRateReadings: [],
-        stepsReadings: [],
-        caloriesReadings: [],
-        oxygenReadings: [],
-        lastUpdated: new Date(),
-        collectionCount: 0
-      };
-    }
-    
-    if (value >= 30 && value <= 220) {
-      this.aggregatedMetrics.heartRateReadings.push(value);
-      // Keep only last 100 readings
-      if (this.aggregatedMetrics.heartRateReadings.length > 100) {
-        this.aggregatedMetrics.heartRateReadings.shift();
+    try {
+      // Validate input
+      if (typeof value !== 'number' || isNaN(value)) {
+        console.warn('[BackgroundData] Invalid heart rate value:', value);
+        return;
       }
+
+      if (!this.aggregatedMetrics) {
+        this.aggregatedMetrics = {
+          heartRateReadings: [],
+          stepsReadings: [],
+          caloriesReadings: [],
+          oxygenReadings: [],
+          lastUpdated: new Date(),
+          collectionCount: 0
+        };
+      }
+      
+      if (value >= 30 && value <= 220) {
+        this.aggregatedMetrics.heartRateReadings.push(value);
+        // Keep only last 100 readings
+        if (this.aggregatedMetrics.heartRateReadings.length > 100) {
+          this.aggregatedMetrics.heartRateReadings.shift();
+        }
+      }
+    } catch (error) {
+      console.error('[BackgroundData] Error adding heart rate reading:', error);
     }
   }
 
@@ -173,22 +183,32 @@ class BackgroundDataService {
    * Add steps reading to aggregation
    */
   addStepsReading(value: number) {
-    if (!this.aggregatedMetrics) {
-      this.aggregatedMetrics = {
-        heartRateReadings: [],
-        stepsReadings: [],
-        caloriesReadings: [],
-        oxygenReadings: [],
-        lastUpdated: new Date(),
-        collectionCount: 0
-      };
-    }
-    
-    if (value >= 0 && value < 1000000) {
-      this.aggregatedMetrics.stepsReadings.push(value);
-      if (this.aggregatedMetrics.stepsReadings.length > 100) {
-        this.aggregatedMetrics.stepsReadings.shift();
+    try {
+      // Validate input
+      if (typeof value !== 'number' || isNaN(value)) {
+        console.warn('[BackgroundData] Invalid steps value:', value);
+        return;
       }
+
+      if (!this.aggregatedMetrics) {
+        this.aggregatedMetrics = {
+          heartRateReadings: [],
+          stepsReadings: [],
+          caloriesReadings: [],
+          oxygenReadings: [],
+          lastUpdated: new Date(),
+          collectionCount: 0
+        };
+      }
+      
+      if (value >= 0 && value < 1000000) {
+        this.aggregatedMetrics.stepsReadings.push(value);
+        if (this.aggregatedMetrics.stepsReadings.length > 100) {
+          this.aggregatedMetrics.stepsReadings.shift();
+        }
+      }
+    } catch (error) {
+      console.error('[BackgroundData] Error adding steps reading:', error);
     }
   }
 
@@ -196,22 +216,32 @@ class BackgroundDataService {
    * Add calories reading to aggregation
    */
   addCaloriesReading(value: number) {
-    if (!this.aggregatedMetrics) {
-      this.aggregatedMetrics = {
-        heartRateReadings: [],
-        stepsReadings: [],
-        caloriesReadings: [],
-        oxygenReadings: [],
-        lastUpdated: new Date(),
-        collectionCount: 0
-      };
-    }
-    
-    if (value > 0 && value < 200000) {
-      this.aggregatedMetrics.caloriesReadings.push(value);
-      if (this.aggregatedMetrics.caloriesReadings.length > 100) {
-        this.aggregatedMetrics.caloriesReadings.shift();
+    try {
+      // Validate input
+      if (typeof value !== 'number' || isNaN(value)) {
+        console.warn('[BackgroundData] Invalid calories value:', value);
+        return;
       }
+
+      if (!this.aggregatedMetrics) {
+        this.aggregatedMetrics = {
+          heartRateReadings: [],
+          stepsReadings: [],
+          caloriesReadings: [],
+          oxygenReadings: [],
+          lastUpdated: new Date(),
+          collectionCount: 0
+        };
+      }
+      
+      if (value > 0 && value < 200000) {
+        this.aggregatedMetrics.caloriesReadings.push(value);
+        if (this.aggregatedMetrics.caloriesReadings.length > 100) {
+          this.aggregatedMetrics.caloriesReadings.shift();
+        }
+      }
+    } catch (error) {
+      console.error('[BackgroundData] Error adding calories reading:', error);
     }
   }
 
@@ -219,22 +249,32 @@ class BackgroundDataService {
    * Add oxygen reading to aggregation
    */
   addOxygenReading(value: number) {
-    if (!this.aggregatedMetrics) {
-      this.aggregatedMetrics = {
-        heartRateReadings: [],
-        stepsReadings: [],
-        caloriesReadings: [],
-        oxygenReadings: [],
-        lastUpdated: new Date(),
-        collectionCount: 0
-      };
-    }
-    
-    if (value >= 50 && value <= 100) {
-      this.aggregatedMetrics.oxygenReadings.push(value);
-      if (this.aggregatedMetrics.oxygenReadings.length > 100) {
-        this.aggregatedMetrics.oxygenReadings.shift();
+    try {
+      // Validate input
+      if (typeof value !== 'number' || isNaN(value)) {
+        console.warn('[BackgroundData] Invalid oxygen value:', value);
+        return;
       }
+
+      if (!this.aggregatedMetrics) {
+        this.aggregatedMetrics = {
+          heartRateReadings: [],
+          stepsReadings: [],
+          caloriesReadings: [],
+          oxygenReadings: [],
+          lastUpdated: new Date(),
+          collectionCount: 0
+        };
+      }
+      
+      if (value >= 50 && value <= 100) {
+        this.aggregatedMetrics.oxygenReadings.push(value);
+        if (this.aggregatedMetrics.oxygenReadings.length > 100) {
+          this.aggregatedMetrics.oxygenReadings.shift();
+        }
+      }
+    } catch (error) {
+      console.error('[BackgroundData] Error adding oxygen reading:', error);
     }
   }
 

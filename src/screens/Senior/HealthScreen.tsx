@@ -20,10 +20,8 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { useBLEWatch } from '../../hooks/useBLEWatch';
+import { useBLEWatchV2 } from '../../hooks/useBLEWatchV2';
 import { syncBackgroundMetricsToDatabase } from '../../services/backgroundSyncService';
-import { demoModeService } from '../../services/demoModeService';
-import { mockDataService } from '../../services/mockDataService';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
@@ -51,13 +49,44 @@ const HealthScreen = () => {
     watchData = { status: 'disconnected' },
     devices = [],
     isScanning = false,
+    connectionState = 'idle',
     syncDeviceData = async () => ({}),
     disconnectDevice = () => {},
     isSyncing = false,
     startScan = () => {},
     stopScan = () => {},
     connectToDevice = () => {},
-  } = useBLEWatch();
+    bleService,
+    mobileSensorService,
+  } = useBLEWatchV2();
+
+  // Merge mobile sensor data with watch data
+  const [displayData, setDisplayData] = useState(watchData);
+
+  // Merge mobile sensor data with watch data
+  useEffect(() => {
+    if (mobileSensorService) {
+      const mobileData = mobileSensorService.getTodayData();
+      const merged = {
+        ...watchData,
+        // Use mobile sensor data if watch doesn't have it
+        steps: watchData?.steps || mobileData.steps || 0,
+        calories: watchData?.calories || mobileData.calories || 0,
+      };
+      setDisplayData(merged);
+      
+      console.log('[HealthScreen] Merged data:', {
+        status: merged?.status,
+        heartRate: merged?.heartRate,
+        steps: merged?.steps,
+        calories: merged?.calories,
+        oxygenSaturation: merged?.oxygenSaturation,
+        battery: merged?.battery,
+      });
+    } else {
+      setDisplayData(watchData);
+    }
+  }, [watchData, mobileSensorService]);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'cardio' | 'activity' | 'wellness'>('overview');
   const [refreshing, setRefreshing] = useState(false);
@@ -67,8 +96,6 @@ const HealthScreen = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSyncingBackground, setIsSyncingBackground] = useState(false);
   const [backgroundMetricsCount, setBackgroundMetricsCount] = useState(0);
-  const [isDemoMode, setIsDemoMode] = useState(false);
-  const [demoData, setDemoData] = useState<any>(null);
   const isMountedRef = useRef(true);
 
   const STORAGE_KEY = 'previouslyConnectedDevices';
@@ -152,90 +179,32 @@ const HealthScreen = () => {
     }
   }, [userId]);
 
-  // Initialize demo mode
-  const initializeDemoMode = useCallback(async () => {
-    try {
-      await demoModeService.initialize();
-      const isActive = demoModeService.isActive();
-      if (isMountedRef.current) {
-        setIsDemoMode(isActive);
-        if (isActive) {
-          const mockData = demoModeService.getMockData();
-          setDemoData(mockData);
-        }
-      }
-    } catch (err) {
-      console.error('Error initializing demo mode:', err);
-    }
-  }, []);
-
-  // Toggle demo mode
-  const toggleDemoMode = useCallback(async () => {
-    try {
-      if (isDemoMode) {
-        await demoModeService.disable();
-        if (isMountedRef.current) {
-          setIsDemoMode(false);
-          setDemoData(null);
-        }
-      } else {
-        await demoModeService.enable();
-        if (isMountedRef.current) {
-          setIsDemoMode(true);
-          const mockData = demoModeService.getMockData();
-          setDemoData(mockData);
-        }
-      }
-    } catch (err) {
-      console.error('Error toggling demo mode:', err);
-      Alert.alert('Error', 'Failed to toggle demo mode');
-    }
-  }, [isDemoMode]);
-
-  // Generate new demo data
-  const generateNewDemoData = useCallback(async () => {
-    try {
-      if (!userId) {
-        Alert.alert('Error', 'User not authenticated');
-        return;
-      }
-      
-      const newData = demoModeService.generateNewMockData();
-      await demoModeService.saveMockDataToSupabase(userId);
-      
-      if (isMountedRef.current) {
-        setDemoData(newData);
-        Alert.alert('Success', 'Demo data generated and saved');
-      }
-    } catch (err) {
-      console.error('Error generating demo data:', err);
-      Alert.alert('Error', 'Failed to generate demo data');
-    }
-  }, [userId]);
-
-  // Generate historical demo data
-  const generateHistoricalDemoData = useCallback(async () => {
-    try {
-      if (!userId) {
-        Alert.alert('Error', 'User not authenticated');
-        return;
-      }
-      
-      await demoModeService.generateHistoricalData(userId, 7);
-      if (isMountedRef.current) {
-        Alert.alert('Success', 'Generated 7 days of demo data');
-      }
-    } catch (err) {
-      console.error('Error generating historical data:', err);
-      Alert.alert('Error', 'Failed to generate historical data');
-    }
-  }, [userId]);
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
   }, []);
+
+  // Monitor connection state changes (new feature from useBLEWatchV2)
+  useEffect(() => {
+    if (!bleService) return;
+    
+    const unsubscribe = bleService.onStateChange((state) => {
+      console.log('[HealthScreen] BLE connection state:', state);
+      
+      // Optional: Show toast or alert for important state changes
+      if (state === 'reconnecting') {
+        console.log('[HealthScreen] Watch is reconnecting...');
+      } else if (state === 'error') {
+        console.log('[HealthScreen] BLE connection error');
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [bleService]);
 
   useEffect(() => {
     const getUser = async () => {
@@ -256,9 +225,7 @@ const HealthScreen = () => {
     loadDevicesFromStorage();
     // Load background metrics count
     loadBackgroundMetricsCount();
-    // Initialize demo mode
-    initializeDemoMode();
-  }, [loadDevicesFromStorage, loadBackgroundMetricsCount, initializeDemoMode]);
+  }, [loadDevicesFromStorage, loadBackgroundMetricsCount]);
 
   // Store recently connected device with error handling
   useEffect(() => {
@@ -470,38 +437,6 @@ const HealthScreen = () => {
     >
       {renderDeviceCard()}
 
-      {/* Demo Mode Card */}
-      {isDemoMode && (
-        <View style={[styles.demoCard, { backgroundColor: isDark ? '#2D3748' : '#FFF9E6' }]}>
-          <View style={styles.demoHeader}>
-            <MaterialCommunityIcons name="beaker" size={24} color={isDark ? '#F6AD55' : '#ED8936'} />
-            <Text style={[styles.demoTitle, { color: isDark ? '#F6AD55' : '#ED8936' }]}>Demo Mode Active</Text>
-            <TouchableOpacity onPress={toggleDemoMode}>
-              <MaterialCommunityIcons name="close" size={20} color={isDark ? '#F6AD55' : '#ED8936'} />
-            </TouchableOpacity>
-          </View>
-          <Text style={[styles.demoText, { color: isDark ? '#E2E8F0' : '#744210' }]}>
-            Using simulated watch data for testing
-          </Text>
-          <View style={styles.demoButtonsContainer}>
-            <TouchableOpacity
-              style={[styles.demoButton, { backgroundColor: isDark ? '#4299E1' : '#3182CE' }]}
-              onPress={generateNewDemoData}
-            >
-              <MaterialCommunityIcons name="refresh" size={16} color="white" />
-              <Text style={styles.demoButtonText}>New Data</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.demoButton, { backgroundColor: isDark ? '#48BB78' : '#2F855A' }]}
-              onPress={generateHistoricalDemoData}
-            >
-              <MaterialCommunityIcons name="history" size={16} color="white" />
-              <Text style={styles.demoButtonText}>7-Day History</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
       <View style={styles.metricsContainer}>
         <Text style={[styles.sectionTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
           Your Health Metrics
@@ -511,19 +446,25 @@ const HealthScreen = () => {
           <MetricCard
             icon="heart"
             label="Heart Rate"
-            value={watchData?.heartRate || '--'}
+            value={displayData?.heartRate ? String(displayData.heartRate) : '--'}
             unit="BPM"
             color="#FF6B6B"
-            status={watchData?.heartRate ? 'Normal' : 'No data'}
-            onPress={() => navigation.navigate('HeartRate')}
+            status={displayData?.heartRate ? 'Normal' : 'No data'}
+            onPress={() => {
+              try {
+                navigation.navigate('HeartRate');
+              } catch (e) {
+                console.error('[HealthScreen] Navigation error:', e);
+              }
+            }}
           />
           <MetricCard
             icon="walk"
             label="Steps"
-            value={watchData?.steps || '--'}
+            value={displayData?.steps || '--'}
             unit="steps"
             color="#4CAF50"
-            status={watchData?.steps ? `${Math.round((watchData.steps / 10000) * 100)}% goal` : 'No data'}
+            status={displayData?.steps ? `${Math.round((displayData.steps / 10000) * 100)}% goal` : 'No data'}
             onPress={() => navigation.navigate('Steps')}
           />
         </View>
@@ -532,19 +473,19 @@ const HealthScreen = () => {
           <MetricCard
             icon="lungs"
             label="Oxygen"
-            value={watchData?.oxygenSaturation || '--'}
+            value={displayData?.oxygenSaturation || '--'}
             unit="%"
             color="#2196F3"
-            status={watchData?.oxygenSaturation ? 'Good' : 'No data'}
+            status={displayData?.oxygenSaturation ? 'Good' : 'No data'}
             onPress={() => navigation.navigate('Oxygen')}
           />
           <MetricCard
             icon="heart-pulse"
             label="Blood Pressure"
-            value={watchData?.bloodPressure ? `${watchData.bloodPressure.systolic}/${watchData.bloodPressure.diastolic}` : '--'}
+            value={displayData?.bloodPressure ? `${displayData.bloodPressure.systolic}/${displayData.bloodPressure.diastolic}` : '--'}
             unit="mmHg"
             color="#E91E63"
-            status={watchData?.bloodPressure ? 'Normal' : 'No data'}
+            status={displayData?.bloodPressure ? 'Normal' : 'No data'}
             onPress={() => navigation.navigate('BloodPressure')}
           />
         </View>
@@ -553,19 +494,19 @@ const HealthScreen = () => {
           <MetricCard
             icon="fire"
             label="Calories"
-            value={watchData?.calories || '--'}
+            value={displayData?.calories || '--'}
             unit="kcal"
             color="#FF9800"
-            status={watchData?.calories ? `${Math.round((watchData.calories / 2000) * 100)}% goal` : 'No data'}
+            status={displayData?.calories ? `${Math.round((displayData.calories / 2000) * 100)}% goal` : 'No data'}
             onPress={() => navigation.navigate('Calories')}
           />
           <MetricCard
             icon="moon-waning-crescent"
             label="Sleep"
-            value={watchData?.sleepData ? `${Math.floor(watchData.sleepData.duration / 60)}h` : '--'}
+            value={displayData?.sleepData ? `${Math.floor(displayData.sleepData.duration / 60)}h` : '--'}
             unit="duration"
             color="#9C27B0"
-            status={watchData?.sleepData?.quality || 'No data'}
+            status={displayData?.sleepData?.quality || 'No data'}
             onPress={() => navigation.navigate('Sleep')}
           />
         </View>
@@ -573,29 +514,29 @@ const HealthScreen = () => {
         <MetricCard
           icon="water"
           label="Hydration"
-          value={watchData?.hydration?.waterIntake || '--'}
+          value={displayData?.hydration?.waterIntake || '--'}
           unit="ml"
           color="#2196F3"
-          status={watchData?.hydration ? `${Math.round((watchData.hydration.waterIntake / 2000) * 100)}% goal` : 'No data'}
+          status={displayData?.hydration ? `${Math.round((displayData.hydration.waterIntake / 2000) * 100)}% goal` : 'No data'}
           onPress={() => navigation.navigate('Hydration')}
         />
       </View>
 
       {/* Battery Display - Keep watch battery visible */}
-      {watchData?.battery !== undefined && (
+      {displayData?.battery !== undefined && (
         <View style={[styles.batteryCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
           <View style={styles.batteryHeader}>
             <MaterialCommunityIcons 
-              name={watchData.battery > 50 ? 'battery' : watchData.battery > 20 ? 'battery-50' : 'battery-alert'} 
+              name={(displayData?.battery ?? 0) > 50 ? 'battery' : (displayData?.battery ?? 0) > 20 ? 'battery-50' : 'battery-alert'} 
               size={24} 
-              color={watchData.battery > 50 ? '#48BB78' : watchData.battery > 20 ? '#D69E2E' : '#E53E3E'} 
+              color={(displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E'} 
             />
             <View style={styles.batteryInfo}>
               <Text style={[styles.batteryLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>
                 Watch Battery
               </Text>
-              <Text style={[styles.batteryValue, { color: watchData.battery > 50 ? '#48BB78' : watchData.battery > 20 ? '#D69E2E' : '#E53E3E' }]}>
-                {watchData.battery}%
+              <Text style={[styles.batteryValue, { color: (displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E' }]}>
+                {displayData?.battery ?? 0}%
               </Text>
             </View>
             <View style={[styles.batteryBar, { backgroundColor: isDark ? '#404854' : '#E2E8F0' }]}>
@@ -603,8 +544,8 @@ const HealthScreen = () => {
                 style={[
                   styles.batteryFill, 
                   { 
-                    width: `${watchData.battery}%`,
-                    backgroundColor: watchData.battery > 50 ? '#48BB78' : watchData.battery > 20 ? '#D69E2E' : '#E53E3E'
+                    width: `${displayData?.battery ?? 0}%`,
+                    backgroundColor: (displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E'
                   }
                 ]} 
               />
@@ -933,19 +874,9 @@ const HealthScreen = () => {
         <Text style={[styles.headerTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
           Health Dashboard
         </Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {isDemoMode && (
-            <TouchableOpacity
-              onPress={toggleDemoMode}
-              style={{ padding: 4 }}
-            >
-              <MaterialCommunityIcons name="beaker" size={24} color={isDark ? '#F6AD55' : '#ED8936'} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity onPress={() => onRefresh()}>
-            <MaterialCommunityIcons name="refresh" size={24} color={isDark ? '#48BB78' : '#2F855A'} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => onRefresh()}>
+          <MaterialCommunityIcons name="refresh" size={24} color={isDark ? '#48BB78' : '#2F855A'} />
+        </TouchableOpacity>
       </View>
 
       <TabNavigation />

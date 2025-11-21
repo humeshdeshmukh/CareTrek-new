@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../../contexts/theme/ThemeContext';
-import { useBLEWatch } from '../../../hooks/useBLEWatch';
+import { useBLEWatchV2 } from '../../../hooks/useBLEWatchV2';
 import { LineChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics } from '../../../services/healthDataService';
@@ -25,7 +25,7 @@ const CHART_WIDTH = SCREEN_WIDTH - 40;
 
 const BloodPressureScreen: React.FC<any> = ({ navigation }) => {
   const { isDark, colors } = useTheme();
-  const { watchData, syncDeviceData, isSyncing } = useBLEWatch();
+  const { watchData, syncDeviceData, isSyncing } = useBLEWatchV2();
   const [metrics, setMetrics] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
