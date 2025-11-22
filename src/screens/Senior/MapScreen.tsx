@@ -32,6 +32,7 @@ import { homeLocationService } from '../../services/homeLocationService';
 import * as TaskManager from 'expo-task-manager';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as Notifications from 'expo-notifications';
+import { seniorLocationService } from '../../services/seniorLocationService';
 // Remove duplicate Linking import
 
 const { width, height } = Dimensions.get('window');
@@ -104,7 +105,7 @@ const MapScreen: React.FC = () => {
   const [newZoneRadius, setNewZoneRadius] = useState<number>(100);
   const [favorites, setFavorites] = useState<LocationPoint[]>([]);
   const [favoritesModalVisible, setFavoritesModalVisible] = useState(false);
-  const [homeLocation, setHomeLocation] = useState<{latitude: number, longitude: number} | null>(null);
+  const [homeLocation, setHomeLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [homeAddress, setHomeAddress] = useState<string>('');
 
 
@@ -127,13 +128,41 @@ const MapScreen: React.FC = () => {
   const [showLocationDetails, setShowLocationDetails] = useState(false);
   const [pinnedLocation, setPinnedLocation] = useState<any>(null);
 
+  // Live Tracking State
+  const [isLiveTrackingEnabled, setIsLiveTrackingEnabled] = useState(false);
+
+  useEffect(() => {
+    checkTrackingStatus();
+  }, []);
+
+  const checkTrackingStatus = async () => {
+    const active = await seniorLocationService.isTrackingActive();
+    setIsLiveTrackingEnabled(active);
+  };
+
+  const toggleLiveTracking = async () => {
+    if (isLiveTrackingEnabled) {
+      await seniorLocationService.stopBackgroundLocationUpdates();
+      setIsLiveTrackingEnabled(false);
+      Alert.alert('Live Tracking', 'Live location sharing stopped.');
+    } else {
+      const success = await seniorLocationService.startBackgroundLocationUpdates();
+      if (success) {
+        setIsLiveTrackingEnabled(true);
+        Alert.alert('Live Tracking', 'Live location sharing started. Family members can now see your real-time location.');
+      } else {
+        Alert.alert('Error', 'Failed to start live tracking. Please check location permissions.');
+      }
+    }
+  };
+
   // Request location permission for both Android and iOS
   const requestLocationPermission = useCallback(async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       const granted = status === 'granted';
       setHasLocationPermission(granted);
-      
+
       if (!granted) {
         Alert.alert(
           'Permission Required',
@@ -195,7 +224,7 @@ const MapScreen: React.FC = () => {
 
       console.log('Got position:', location);
       const { latitude, longitude, accuracy } = location.coords;
-      
+
       if (!latitude || !longitude) {
         throw new Error('Invalid coordinates received');
       }
@@ -331,9 +360,9 @@ const MapScreen: React.FC = () => {
   }, []);
 
   // persist favorites/safezones/home when changed
-  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(favorites)).catch(() => {}); }, [favorites]);
-  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.SAFE_ZONES, JSON.stringify(safeZones)).catch(() => {}); }, [safeZones]);
-  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.HOME, JSON.stringify(homeLocation)).catch(() => {}); }, [homeLocation]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(favorites)).catch(() => { }); }, [favorites]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.SAFE_ZONES, JSON.stringify(safeZones)).catch(() => { }); }, [safeZones]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.HOME, JSON.stringify(homeLocation)).catch(() => { }); }, [homeLocation]);
 
   // update address when currentLocation changes
   useEffect(() => {
@@ -381,7 +410,7 @@ const MapScreen: React.FC = () => {
       if (homeRaw) {
         const h = JSON.parse(homeRaw);
         setHomeLocation(h);
-        if (h) reverseGeocode(h.latitude, h.longitude).then(a => setHomeAddress(a)).catch(() => {});
+        if (h) reverseGeocode(h.latitude, h.longitude).then(a => setHomeAddress(a)).catch(() => { });
       }
     } catch (e) {
       console.warn('Load persisted failed', e);
@@ -601,29 +630,29 @@ const MapScreen: React.FC = () => {
     }, 700) as unknown as number;
   };
 
-  const stopNavAnimation = () => { 
-    if (navAnimRef.current) { 
-      clearInterval(navAnimRef.current as any); 
-      navAnimRef.current = null; 
-      navIndexRef.current = 0; 
-    } 
+  const stopNavAnimation = () => {
+    if (navAnimRef.current) {
+      clearInterval(navAnimRef.current as any);
+      navAnimRef.current = null;
+      navIndexRef.current = 0;
+    }
   };
 
   // Simple straight-line navigation fallback
   const startNavigation = useCallback((destination: { latitude: number; longitude: number }) => {
     if (!currentLocation) return;
-    
+
     const newRoute = [
       { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
       destination
     ];
-    
+
     setRouteCoords(newRoute);
     setRouteSteps([
       { instruction: 'Head to destination', lat: destination.latitude, lng: destination.longitude }
     ]);
     setIsNavigating(true);
-    
+
     mapRef.current?.fitToCoordinates(newRoute, {
       edgePadding: { top: 100, right: 50, bottom: 200, left: 50 },
       animated: true,
@@ -632,43 +661,43 @@ const MapScreen: React.FC = () => {
 
   const startNavigationTo = useCallback(async (lat: number, lng: number) => {
     if (!currentLocation) return;
-    
+
     try {
       const url = `https://router.project-osrm.org/route/v1/driving/${currentLocation.longitude},${currentLocation.latitude};${lng},${lat}?overview=full&geometries=geojson&steps=true`;
       const res = await fetch(url);
       const json = await res.json();
-      
+
       if (json.routes && json.routes.length) {
         const route = json.routes[0];
-        const coords = route.geometry.coordinates.map((c: any) => ({ 
-          latitude: c[1], 
-          longitude: c[0] 
+        const coords = route.geometry.coordinates.map((c: any) => ({
+          latitude: c[1],
+          longitude: c[0]
         }));
-        
+
         setRouteCoords(coords);
-        
+
         // Extract total distance (in meters) and duration (in seconds)
         const distance = route.distance || 0; // meters
         const duration = route.duration || 0; // seconds
         setTotalDistance(distance);
         setTotalDuration(duration);
-        
+
         const steps: Array<{ instruction: string; lat: number; lng: number; distance?: number; duration?: number }> = [];
-        (route.legs || []).forEach((leg: any) => { 
-          (leg.steps || []).forEach((s: any) => { 
-            steps.push({ 
-              instruction: s.maneuver?.instruction || 'Proceed', 
-              lat: s.maneuver?.location?.[1] || lat, 
+        (route.legs || []).forEach((leg: any) => {
+          (leg.steps || []).forEach((s: any) => {
+            steps.push({
+              instruction: s.maneuver?.instruction || 'Proceed',
+              lat: s.maneuver?.location?.[1] || lat,
               lng: s.maneuver?.location?.[0] || lng,
               distance: s.distance,
               duration: s.duration
-            }); 
-          }); 
+            });
+          });
         });
-        
+
         setRouteSteps(steps);
         setIsNavigating(true);
-        
+
         // Center map on route
         if (coords.length > 0) {
           mapRef.current?.fitToCoordinates(coords, {
@@ -743,7 +772,7 @@ const MapScreen: React.FC = () => {
     const timeout = setTimeout(async () => {
       try {
         const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
-        
+
         if (!googleMapsApiKey) {
           // Fallback to Nominatim
           const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8`;
@@ -795,7 +824,7 @@ const MapScreen: React.FC = () => {
         console.error('Error getting place details:', error);
       }
     }
-    
+
     // Center on selected location
     mapRef.current?.animateToRegion({
       latitude: lat,
@@ -911,9 +940,9 @@ const MapScreen: React.FC = () => {
           {renderMapMarkers()}
           {safeZones.map((z) => (<Circle key={z.id} center={{ latitude: z.latitude, longitude: z.longitude }} radius={z.radius} strokeColor="rgba(34,139,34,0.6)" fillColor="rgba(34,139,34,0.15)" />))}
           {favorites.map((f, idx) => (
-            <Marker 
-              key={`fav-${idx}`} 
-              coordinate={{ latitude: f.latitude, longitude: f.longitude }} 
+            <Marker
+              key={`fav-${idx}`}
+              coordinate={{ latitude: f.latitude, longitude: f.longitude }}
               pinColor="purple"
               onPress={() => {
                 setSelectedLocation({ latitude: f.latitude, longitude: f.longitude, display_name: `Favorite ${idx + 1}` });
@@ -936,8 +965,8 @@ const MapScreen: React.FC = () => {
             <>
               <Polyline coordinates={routeCoords} strokeWidth={5} strokeColor="#3B82F6" lineDashPattern={[5, 5]} />
               {routeCoords.length > 0 && (
-                <Marker 
-                  coordinate={routeCoords[routeCoords.length - 1]} 
+                <Marker
+                  coordinate={routeCoords[routeCoords.length - 1]}
                   title="Destination"
                   pinColor="#10B981"
                 />
@@ -964,6 +993,22 @@ const MapScreen: React.FC = () => {
       </View>
       {/* Floating Action Buttons */}
       <View style={styles.floatingButtonsContainer}>
+        {/* Live Tracking Toggle */}
+        <TouchableOpacity
+          style={[
+            styles.floatingButton,
+            { backgroundColor: isLiveTrackingEnabled ? '#EF4444' : '#10B981', marginBottom: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 }
+          ]}
+          onPress={toggleLiveTracking}
+          accessibilityLabel={isLiveTrackingEnabled ? "Stop live sharing" : "Start live sharing"}
+          activeOpacity={0.8}
+        >
+          <Ionicons name={isLiveTrackingEnabled ? "stop-circle" : "radio"} size={24} color="white" />
+          <Text style={{ color: 'white', fontWeight: '600', marginLeft: 8 }}>
+            {isLiveTrackingEnabled ? 'Stop Sharing' : 'Live Share'}
+          </Text>
+        </TouchableOpacity>
+
         {/* Current Location Button */}
         <TouchableOpacity
           style={[styles.floatingButton, { backgroundColor: isDark ? '#3B82F6' : '#3B82F6' }]}
@@ -1011,7 +1056,7 @@ const MapScreen: React.FC = () => {
                 {selectedLocation.latitude.toFixed(4)}, {selectedLocation.longitude.toFixed(4)}
               </Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => {
                 setShowLocationDetails(false);
                 setSelectedLocation(null);
@@ -1097,7 +1142,7 @@ const MapScreen: React.FC = () => {
               )}
             </View>
           </View>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.stopNavButton}
             onPress={stopNavigation}
           >
@@ -1141,7 +1186,7 @@ const MapScreen: React.FC = () => {
                 <TouchableOpacity onPress={() => { setFavorites((prev) => prev.filter((_, idx) => idx !== i)); }}><Text style={{ color: '#EF4444' }}>Remove</Text></TouchableOpacity>
               </View>
             </TouchableOpacity>
-          ))) }
+          )))}
           <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' }}>
             <TouchableOpacity style={styles.modalButtonCancel} onPress={() => setFavoritesModalVisible(false)}><Text>Close</Text></TouchableOpacity>
           </View>
@@ -1331,9 +1376,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  input: { 
-    padding: 12, 
-    borderRadius: 10, 
+  input: {
+    padding: 12,
+    borderRadius: 10,
     marginVertical: 10,
     backgroundColor: '#F9FAFB',
     color: '#000000',

@@ -810,23 +810,39 @@ export const useBLEWatchV2 = () => {
     disconnectDevice,
     syncDeviceData: async () => {
       try {
-        if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
-
         // Get mobile sensor data (steps, calories from phone)
         const mobileData = mobileSensorService.getTodayData();
 
-        const dataToSync = {
-          ...watchData,
-          steps: mobileData.steps || watchData.steps,
-          calories: mobileData.calories || watchData.calories,
-        };
+        // Determine device info
+        let deviceId = watchData.deviceId;
+        let deviceName = watchData.deviceName;
+        let deviceType = watchData.deviceType;
 
-        if (dataToSync && Object.keys(dataToSync).length > 0) {
-          console.log('[BLE-V2] Syncing data to Supabase:', dataToSync);
-          await syncToSupabase(dataToSync);
+        // If no watch connected, use mobile sensor as device
+        if (!connectedDeviceRef.current || !deviceId) {
+          deviceId = 'mobile-sensor-' + (Platform.OS === 'android' ? 'android' : 'ios');
+          deviceName = 'Mobile Sensors';
+          deviceType = 'generic';
         }
 
-        return { success: true };
+        const dataToSync = {
+          ...watchData,
+          deviceId,
+          deviceName,
+          deviceType,
+          steps: mobileData.steps || watchData.steps || 0,
+          calories: mobileData.calories || watchData.calories || 0,
+          // Keep other metrics if available, otherwise they might be undefined which is fine
+        };
+
+        if (dataToSync && (dataToSync.steps > 0 || dataToSync.calories > 0 || connectedDeviceRef.current)) {
+          console.log('[BLE-V2] Syncing data to Supabase:', dataToSync);
+          await syncToSupabase(dataToSync);
+          return { success: true };
+        } else {
+          console.log('[BLE-V2] No data to sync (no steps/calories and no watch connected)');
+          return { success: false, error: 'No data to sync' };
+        }
       } catch (e: any) {
         console.error('[BLE-V2] syncDeviceData error:', e);
         return { success: false, error: e?.message ?? String(e) };

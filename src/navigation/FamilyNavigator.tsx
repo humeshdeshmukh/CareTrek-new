@@ -24,6 +24,7 @@ import MedicationMonitoringScreen from '../screens/family/monitoring/MedicationM
 import AppointmentMonitoringScreen from '../screens/family/monitoring/AppointmentMonitoringScreen';
 import LocationMonitoringScreen from '../screens/family/monitoring/LocationMonitoringScreen';
 import ReminderMonitoringScreen from '../screens/family/monitoring/ReminderMonitoringScreen';
+import SeniorNotesScreen from '../screens/family/monitoring/SeniorNotesScreen';
 import AlertsScreen from '../screens/family/AlertsScreen';
 
 // Tab navigation param list
@@ -52,6 +53,7 @@ export type FamilyStackParamList = {
   AppointmentMonitoring: { seniorId: string; seniorName: string };
   LocationMonitoring: { seniorId?: string; seniorName?: string };
   ReminderMonitoring: { seniorId: string; seniorName: string };
+  SeniorNotes: undefined;
   // Alerts
   Alerts: undefined;
 };
@@ -190,6 +192,7 @@ export const FamilyNavigator: React.FC = () => {
       <Stack.Screen name="AppointmentMonitoring" component={AppointmentMonitoringScreen} options={{ headerShown: false }} />
       <Stack.Screen name="LocationMonitoring" component={LocationMonitoringScreen} options={{ headerShown: false }} />
       <Stack.Screen name="ReminderMonitoring" component={ReminderMonitoringScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="SeniorNotes" component={SeniorNotesScreen} options={{ headerShown: false }} />
       <Stack.Screen name="Alerts" component={AlertsScreen} options={{ title: t('Alerts') || 'Alerts', headerShown: true }} />
       <Stack.Screen name="Settings" component={FamilySettingsScreen} options={{ title: t('Settings') || 'Settings', headerShown: true }} />
       <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ title: t('Edit Profile') || 'Edit Profile', headerShown: true }} />

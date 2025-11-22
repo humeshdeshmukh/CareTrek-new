@@ -1,7 +1,7 @@
 // Simplified babel configuration for Firebase database only
-module.exports = function(api) {
+module.exports = function (api) {
   api.cache(true);
-  
+
   return {
     presets: ['babel-preset-expo'],
     plugins: [
@@ -26,7 +26,9 @@ module.exports = function(api) {
             'SUPABASE_URL',
             'SUPABASE_ANON_KEY',
             'EXPO_PUBLIC_SUPABASE_URL',
-            'EXPO_PUBLIC_SUPABASE_ANON_KEY'
+            'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+            'GOOGLE_MAPS_API_KEY',
+            'EXPO_PUBLIC_GOOGLE_MAPS_API_KEY'
           ],
         },
       ],

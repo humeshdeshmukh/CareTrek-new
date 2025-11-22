@@ -5,70 +5,28 @@ import { useTheme } from '../../../contexts/theme/ThemeContext';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { getUserHealthMetrics, getHealthSummary } from '../../../services/healthDataService';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { supabase } from '../../../lib/supabase';
+import { useConnectedSenior } from '../../../hooks/useConnectedSenior';
 
 const HealthMonitoringScreen = () => {
     const { colors, isDark } = useTheme();
     const navigation = useNavigation();
     const route = useRoute();
-    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
 
-    const [seniorId, setSeniorId] = useState<string | undefined>(params?.seniorId);
-    const [seniorName, setSeniorName] = useState<string | undefined>(params?.seniorName);
+    // Use the standardized hook
+    const { senior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [healthData, setHealthData] = useState<any>(null);
     const [summary, setSummary] = useState<any>(null);
-    const [noSeniors, setNoSeniors] = useState(false);
-
-    // Fetch senior if not provided
-    useEffect(() => {
-        const fetchSenior = async () => {
-            if (seniorId) return;
-
-            try {
-                setLoading(true);
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user) {
-                    setLoading(false);
-                    return;
-                }
-
-                const { data: relationships } = await supabase
-                    .from('family_relationships')
-                    .select('senior_user_id')
-                    .eq('family_member_id', user.id);
-
-                if (relationships && relationships.length > 0) {
-                    const firstSeniorId = relationships[0].senior_user_id;
-                    const { data: profiles } = await supabase
-                        .from('user_profiles')
-                        .select('full_name')
-                        .eq('id', firstSeniorId)
-                        .single();
-
-                    setSeniorId(firstSeniorId);
-                    setSeniorName(profiles?.full_name || 'Senior');
-                } else {
-                    setNoSeniors(true);
-                    setLoading(false);
-                }
-            } catch (error) {
-                console.error('Error fetching senior:', error);
-                setLoading(false);
-            }
-        };
-
-        fetchSenior();
-    }, [seniorId]);
 
     const fetchData = async () => {
-        if (!seniorId) return;
+        if (!senior) return;
 
         try {
             const [metrics, summaryData] = await Promise.all([
-                getUserHealthMetrics(seniorId, 1), // Get latest metric
-                getHealthSummary(seniorId, 1) // Get today's summary
+                getUserHealthMetrics(senior.id, 1), // Get latest metric
+                getHealthSummary(senior.id, 1) // Get today's summary
             ]);
 
             setHealthData(metrics[0] || null);
@@ -82,10 +40,10 @@ const HealthMonitoringScreen = () => {
     };
 
     useEffect(() => {
-        if (seniorId) {
+        if (senior) {
             fetchData();
         }
-    }, [seniorId]);
+    }, [senior]);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -113,7 +71,7 @@ const HealthMonitoringScreen = () => {
         </View>
     );
 
-    if (loading) {
+    if (seniorLoading || (loading && !healthData)) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <ActivityIndicator size="large" color={colors.primary} />
@@ -144,15 +102,20 @@ const HealthMonitoringScreen = () => {
                 </TouchableOpacity>
                 <View>
                     <Text style={[styles.headerTitle, { color: colors.text }]}>
-                        {seniorName}'s Health
+                        {senior?.name}'s Health
                     </Text>
                     <Text style={[styles.lastUpdated, { color: colors.textSecondary }]}>
                         Last updated: {lastUpdated}
                     </Text>
                 </View>
-                <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-                    <Ionicons name="refresh" size={20} color={colors.primary} />
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row' }}>
+                    <TouchableOpacity onPress={() => navigation.navigate('SeniorNotes' as never)} style={[styles.refreshButton, { marginRight: 8 }]}>
+                        <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
+                        <Ionicons name="refresh" size={20} color={colors.primary} />
+                    </TouchableOpacity>
+                </View>
             </View>
 
             <ScrollView

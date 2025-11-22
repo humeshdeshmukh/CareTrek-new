@@ -773,26 +773,25 @@ const HealthScreen = () => {
 
       <TouchableOpacity
         style={[styles.syncButton, { backgroundColor: isDark ? '#48BB78' : '#2F855A', opacity: isSyncing ? 0.6 : 1 }]}
-        onPress={() => {
+        onPress={async () => {
           try {
-            if (watchData?.status === 'connected') {
-              syncDeviceData();
-            }
+            await syncDeviceData();
+            Alert.alert('Success', 'Health data saved to cloud');
           } catch (err) {
             console.error('Error syncing:', err);
             if (isMountedRef.current) {
-              setError('Failed to sync data');
+              setError('Failed to save data');
             }
           }
         }}
-        disabled={isSyncing || watchData?.status !== 'connected'}
+        disabled={isSyncing}
       >
         {isSyncing ? (
           <ActivityIndicator color="white" />
         ) : (
           <>
-            <MaterialCommunityIcons name="sync" size={20} color="white" />
-            <Text style={styles.syncButtonText}>Sync All Data</Text>
+            <MaterialCommunityIcons name="cloud-upload" size={20} color="white" />
+            <Text style={styles.syncButtonText}>Save Health Data</Text>
           </>
         )}
       </TouchableOpacity>

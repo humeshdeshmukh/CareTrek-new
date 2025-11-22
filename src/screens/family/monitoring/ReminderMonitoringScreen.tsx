@@ -47,11 +47,14 @@ const parseTimeString = (timeStr: string): Date => {
     return date;
 };
 
+import { useConnectedSenior } from '../../../hooks/useConnectedSenior';
+
 const ReminderMonitoringScreen = () => {
     const { colors, isDark } = useTheme();
     const navigation = useNavigation();
     const route = useRoute();
-    const { seniorId, seniorName } = route.params as { seniorId: string; seniorName: string };
+
+    const { senior, loading: seniorLoading, noSeniors } = useConnectedSenior();
 
     const [reminders, setReminders] = useState<Reminder[]>([]);
     const [loading, setLoading] = useState(true);
@@ -70,11 +73,12 @@ const ReminderMonitoringScreen = () => {
     });
 
     const fetchReminders = useCallback(async () => {
+        if (!senior) return;
         try {
             const { data, error } = await supabase
                 .from('reminders')
                 .select('*')
-                .eq('user_id', seniorId)
+                .eq('user_id', senior.id)
                 .order('time', { ascending: true });
 
             if (error) throw error;
@@ -86,11 +90,13 @@ const ReminderMonitoringScreen = () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [seniorId]);
+    }, [senior]);
 
     useEffect(() => {
-        fetchReminders();
-    }, [fetchReminders]);
+        if (senior) {
+            fetchReminders();
+        }
+    }, [senior, fetchReminders]);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -144,7 +150,7 @@ const ReminderMonitoringScreen = () => {
                         enabled: newReminder.enabled,
                     })
                     .eq('id', editingReminderId)
-                    .eq('user_id', seniorId)
+                    .eq('user_id', senior?.id)
                     .select()
                     .single();
 
@@ -154,10 +160,11 @@ const ReminderMonitoringScreen = () => {
                 }
             } else {
                 // Add new reminder
+                if (!senior) return;
                 const { data, error } = await supabase
                     .from('reminders')
                     .insert([{
-                        user_id: seniorId,
+                        user_id: senior.id,
                         title: newReminder.title,
                         time: newReminder.time,
                         type: newReminder.type,
@@ -266,10 +273,22 @@ const ReminderMonitoringScreen = () => {
         </View>
     );
 
-    if (loading && !refreshing) {
+    if (seniorLoading || (loading && !refreshing)) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+        );
+    }
+
+    if (noSeniors) {
+        return (
+            <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
+                <Ionicons name="people-outline" size={64} color={colors.textSecondary} />
+                <Text style={{ color: colors.textSecondary, marginTop: 16, textAlign: 'center' }}>No seniors connected</Text>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 20 }}>
+                    <Text style={{ color: colors.primary }}>Go Back</Text>
+                </TouchableOpacity>
             </View>
         );
     }
@@ -281,7 +300,7 @@ const ReminderMonitoringScreen = () => {
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>
-                    {seniorName}'s Reminders
+                    {senior?.name}'s Reminders
                 </Text>
                 <TouchableOpacity
                     onPress={handleOpenAddModal}
