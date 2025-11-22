@@ -26,7 +26,7 @@ const LocationView: React.FC<LocationViewProps> = ({
     (async () => {
       try {
         setIsLoading(true);
-        
+
         // Request permission
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
@@ -113,7 +113,7 @@ const LocationView: React.FC<LocationViewProps> = ({
   if (error) {
     return (
       <View style={[styles.container, style, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Ionicons name="location-off" size={32} color={colors.danger} />
+        <Ionicons name="location-outline" size={32} color={colors.notification} />
         <Text style={[styles.errorText, { color: colors.text }]}>{error}</Text>
         <TouchableOpacity
           style={[styles.button, { backgroundColor: colors.primary }]}
@@ -132,12 +132,12 @@ const LocationView: React.FC<LocationViewProps> = ({
         <View style={styles.locationIcon}>
           <Ionicons name="location" size={24} color={colors.primary} />
         </View>
-        
+
         <View style={styles.locationInfo}>
           <Text style={[styles.coordinates, { color: colors.text }]}>
             {location?.coords.latitude.toFixed(6)}, {location?.coords.longitude.toFixed(6)}
           </Text>
-          
+
           {address ? (
             <Text style={[styles.address, { color: colors.textSecondary }]} numberOfLines={2}>
               {address}
@@ -147,8 +147,8 @@ const LocationView: React.FC<LocationViewProps> = ({
               Address not available
             </Text>
           )}
-          
-          <Text style={[styles.accuracy, { color: colors.textTertiary }]}>
+
+          <Text style={[styles.accuracy, { color: colors.textSecondary }]}>
             Accuracy: ~{location?.coords.accuracy?.toFixed(2)} meters
           </Text>
         </View>
@@ -163,9 +163,9 @@ const LocationView: React.FC<LocationViewProps> = ({
             <Ionicons name="share-social" size={20} color="white" />
             <Text style={styles.actionButtonText}>Share Location</Text>
           </TouchableOpacity>
-          
+
           <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: colors.secondary, marginLeft: 8 }]}
+            style={[styles.actionButton, { backgroundColor: colors.primary, marginLeft: 8 }]}
             onPress={handleRefresh}
           >
             <Ionicons name="refresh" size={20} color="white" />

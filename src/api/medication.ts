@@ -15,12 +15,18 @@ export type Medication = {
   updated_at?: string;
 };
 
-export const getMedications = async (): Promise<{ data: Medication[] | null; error: Error | null }> => {
+export const getMedications = async (userId?: string): Promise<{ data: Medication[] | null; error: Error | null }> => {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('medications')
       .select('*')
       .order('time', { ascending: true });
+
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     return { data, error: null };
@@ -33,7 +39,7 @@ export const getMedications = async (): Promise<{ data: Medication[] | null; err
 export const addMedication = async (medication: Omit<Medication, 'id' | 'created_at' | 'updated_at'> & { user_id: string }): Promise<{ data: Medication | null; error: Error | null }> => {
   try {
     console.log('Adding medication:', medication);
-    
+
     // First, insert the medication
     const { data: insertedData, error: insertError } = await supabase
       .from('medications')
@@ -62,7 +68,7 @@ export const addMedication = async (medication: Omit<Medication, 'id' | 'created
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
-    
+
     if (fetchError) {
       console.error('Fetch after insert error:', fetchError);
       throw fetchError;
@@ -76,9 +82,9 @@ export const addMedication = async (medication: Omit<Medication, 'id' | 'created
     return { data: fetchedData, error: null };
   } catch (error) {
     console.error('Error in addMedication:', error);
-    return { 
-      data: null, 
-      error: error instanceof Error ? error : new Error('Unknown error occurred') 
+    return {
+      data: null,
+      error: error instanceof Error ? error : new Error('Unknown error occurred')
     };
   }
 };

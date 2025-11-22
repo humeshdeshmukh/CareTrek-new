@@ -175,74 +175,7 @@ const AlertsScreen: React.FC = () => {
     setRefreshing(true);
     try {
       await new Promise((r) => setTimeout(r, 700));
-      const mock: AlertItem[] = [
-        {
-          id: '1',
-          type: 'fall',
-          title: t('Fall Detected') || 'Fall Detected',
-          message: t('A potential fall was detected. Please check immediately.') || 'A potential fall was detected. Please check immediately.',
-          timestamp: new Date(Date.now() - 5 * 60 * 1000),
-          read: false,
-          priority: 'high',
-          details: t('Fall detected at 2:30 PM. Impact force was 3.5g.') || 'Fall detected at 2:30 PM. Impact force was 3.5g.',
-          seniorName: 'Bhushan Mahant',
-        },
-        {
-          id: '2',
-          type: 'medication',
-          title: t('Medication Missed') || 'Medication Missed',
-          message: t('Afternoon medication was not taken.') || 'Afternoon medication was not taken.',
-          timestamp: new Date(Date.now() - 30 * 60 * 1000),
-          read: false,
-          priority: 'medium',
-          details: t('Lisinopril 10mg was scheduled for 2:00 PM') || 'Lisinopril 10mg was scheduled for 2:00 PM',
-          seniorName: 'Mary Smith',
-        },
-        {
-          id: '3',
-          type: 'heart',
-          title: t('High Heart Rate') || 'High Heart Rate',
-          message: t('Heart rate is elevated (112 BPM).') || 'Heart rate is elevated (112 BPM).',
-          timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-          read: true,
-          priority: 'high',
-          details: t('Normal range: 60-100 BPM\nLast reading: 112 BPM at 1:45 PM') || 'Normal range: 60-100 BPM\nLast reading: 112 BPM at 1:45 PM',
-          seniorName: 'Mary Smith',
-        },
-        {
-          id: '4',
-          type: 'location',
-          title: t('Unusual Location') || 'Unusual Location',
-          message: t('Left the usual area at 10:30 AM') || 'Left the usual area at 10:30 AM',
-          timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000),
-          read: true,
-          priority: 'medium',
-          details: t('Current location: Central Park\nLeft home at 10:30 AM') || 'Current location: Central Park\nLeft home at 10:30 AM',
-          seniorName: 'Bhushan Mahant',
-        },
-        {
-          id: '5',
-          type: 'battery',
-          title: t('Low Battery') || 'Low Battery',
-          message: t('Device battery is at 15%') || 'Device battery is at 15%',
-          timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000),
-          read: true,
-          priority: 'low',
-          details: t('Please charge the device as soon as possible.') || 'Please charge the device as soon as possible.',
-          seniorName: 'Bhushan Mahant',
-        },
-        {
-          id: '6',
-          type: 'appointment',
-          title: t('Upcoming Appointment') || 'Upcoming Appointment',
-          message: t('Doctor appointment tomorrow at 2:00 PM') || 'Doctor appointment tomorrow at 2:00 PM',
-          timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-          read: true,
-          priority: 'low',
-          details: t('Dr. Smith\nCardiology Dept\n123 Medical Center') || 'Dr. Smith\nCardiology Dept\n123 Medical Center',
-          seniorName: 'Mary Smith',
-        },
-      ];
+      const mock: AlertItem[] = [];
       setAlerts(mock);
     } catch (e) {
       console.error(e);

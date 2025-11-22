@@ -23,7 +23,13 @@ type RootStackParamList = {
   Medication: undefined;
   Reminders: undefined;
   SeniorAppointments: { seniorId: string };
+
   HealthHistory: { seniorId: string };
+  HealthMonitoring: { seniorId: string; seniorName: string };
+  MedicationMonitoring: { seniorId: string; seniorName: string };
+  AppointmentMonitoring: { seniorId: string; seniorName: string };
+  LocationMonitoring: { seniorId: string; seniorName: string };
+  ReminderMonitoring: { seniorId: string; seniorName: string };
 };
 
 const HomeScreenFamily = () => {
@@ -33,7 +39,7 @@ const HomeScreenFamily = () => {
   const [connectedSeniors, setConnectedSeniors] = useState<Senior[]>([]);
   const [loading, setLoading] = useState(true);
   const isFocused = useIsFocused();
-  
+
   // Get text color based on theme
   const textColor = isDark ? colors.text : '#1F2937';
 
@@ -74,7 +80,7 @@ const HomeScreenFamily = () => {
       }
 
       const seniorUserIds = relationships.map(rel => rel.senior_user_id).filter(Boolean);
-      
+
       if (seniorUserIds.length === 0) {
         setConnectedSeniors([]);
         setLoading(false);
@@ -95,13 +101,13 @@ const HomeScreenFamily = () => {
       // Transform the data
       const seniors = relationships.map(rel => {
         const profile = userProfiles?.find(p => p.id === rel.senior_user_id);
-        
+
         return {
           id: rel.senior_user_id,
           name: profile?.full_name || `Senior ${rel.senior_user_id.substring(0, 6)}`,
           status: (rel.status as 'online' | 'offline' | 'alert') || 'offline',
-          lastActive: rel.created_at 
-            ? new Date(rel.created_at).toLocaleString() 
+          lastActive: rel.created_at
+            ? new Date(rel.created_at).toLocaleString()
             : 'Unknown',
           avatar_url: profile?.avatar_url,
           email: `${rel.senior_user_id}@caretrek.app` // Placeholder email
@@ -134,7 +140,7 @@ const HomeScreenFamily = () => {
   const handleAddSenior = () => {
     navigation.navigate('AddSenior');
   };
-  
+
   const navigateToScreen = (screenName: keyof Omit<RootStackParamList, 'HealthHistory' | 'SeniorDetail'>) => {
     navigation.navigate(screenName);
   };
@@ -149,7 +155,7 @@ const HomeScreenFamily = () => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#0F172A' : '#F8FAFC' }]}>
-      <ScrollView 
+      <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollView}
       >
@@ -163,7 +169,10 @@ const HomeScreenFamily = () => {
               {t('CareTrek')}
             </Text>
           </View>
-          <TouchableOpacity style={styles.notificationIcon}>
+          <TouchableOpacity
+            style={styles.notificationIcon}
+            onPress={() => navigation.navigate('Alerts')}
+          >
             <Ionicons name="notifications-outline" size={24} color={isDark ? '#E2E8F0' : '#1E293B'} />
             <View style={[styles.notificationBadge, { backgroundColor: isDark ? '#4F46E5' : '#4F46E5' }]} />
           </TouchableOpacity>
@@ -178,7 +187,7 @@ const HomeScreenFamily = () => {
             <Text style={[styles.statValue, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>{connectedSeniors.length}</Text>
             <Text style={[styles.statLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>{t('Seniors')}</Text>
           </View>
-          
+
           <View style={[styles.statCard, { backgroundColor: isDark ? '#1E293B' : '#F0FDF4' }]}>
             <View style={[styles.statIcon, { backgroundColor: isDark ? '#10B981' : '#10B981' }]}>
               <Ionicons name="checkmark-done" size={20} color="#FFFFFF" />
@@ -186,9 +195,9 @@ const HomeScreenFamily = () => {
             <Text style={[styles.statValue, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>0</Text>
             <Text style={[styles.statLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>{t('Active')}</Text>
           </View>
-          
-          <TouchableOpacity 
-            style={[styles.statCard, { 
+
+          <TouchableOpacity
+            style={[styles.statCard, {
               backgroundColor: isDark ? '#2D3748' : '#F1F5F9',
               justifyContent: 'center',
               alignItems: 'center',
@@ -209,12 +218,21 @@ const HomeScreenFamily = () => {
           <Text style={[styles.sectionTitle, { color: isDark ? '#E2E8F0' : '#1E293B', marginBottom: 16 }]}>
             {t('Quick Actions')}
           </Text>
-          
+
           <View style={styles.quickActionsGrid}>
             {/* Health */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => navigation.navigate('Health' as never)}
+              onPress={() => {
+                if (connectedSeniors.length > 0) {
+                  navigation.navigate('HealthMonitoring', {
+                    seniorId: connectedSeniors[0].id,
+                    seniorName: connectedSeniors[0].name
+                  });
+                } else {
+                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
+                }
+              }}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#4F46E5' : '#4F46E5' }]}>
                 <Ionicons name="heart" size={20} color="#FFFFFF" />
@@ -223,20 +241,17 @@ const HomeScreenFamily = () => {
                 {t('Health')}
               </Text>
             </TouchableOpacity>
-            
+
             {/* Medication */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
               onPress={() => {
                 if (connectedSeniors.length > 0) {
-                  navigation.navigate('Medication', { 
+                  navigation.navigate('MedicationMonitoring', {
                     seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name,
-                    seniorAvatar: connectedSeniors[0].avatar_url,
-                    status: connectedSeniors[0].status
+                    seniorName: connectedSeniors[0].name
                   });
                 } else {
-                  // Handle case when there are no connected seniors
                   Alert.alert('No Connected Seniors', 'Please add a senior first.');
                 }
               }}
@@ -248,20 +263,17 @@ const HomeScreenFamily = () => {
                 {t('Medication')}
               </Text>
             </TouchableOpacity>
-            
+
             {/* Reminders */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
               onPress={() => {
                 if (connectedSeniors.length > 0) {
-                  navigation.navigate('Reminders', { 
+                  navigation.navigate('ReminderMonitoring', {
                     seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name,
-                    seniorAvatar: connectedSeniors[0].avatar_url,
-                    status: connectedSeniors[0].status
+                    seniorName: connectedSeniors[0].name
                   });
                 } else {
-                  // Handle case when there are no connected seniors
                   Alert.alert('No Connected Seniors', 'Please add a senior first.');
                 }
               }}
@@ -273,11 +285,42 @@ const HomeScreenFamily = () => {
                 {t('Reminders')}
               </Text>
             </TouchableOpacity>
-            
-            {/* Appointments */}
-            <TouchableOpacity 
+
+            {/* Location */}
+            <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => navigation.navigate('SeniorAppointments', { seniorId: '' })}
+              onPress={() => {
+                if (connectedSeniors.length > 0) {
+                  navigation.navigate('LocationMonitoring', {
+                    seniorId: connectedSeniors[0].id,
+                    seniorName: connectedSeniors[0].name
+                  });
+                } else {
+                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
+                }
+              }}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#3B82F6' : '#3B82F6' }]}>
+                <Ionicons name="location" size={20} color="#FFFFFF" />
+              </View>
+              <Text style={[styles.quickActionText, { color: isDark ? '#E2E8F0' : '#1E293B' }]}>
+                {t('Location')}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Appointments */}
+            <TouchableOpacity
+              style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
+              onPress={() => {
+                if (connectedSeniors.length > 0) {
+                  navigation.navigate('AppointmentMonitoring', {
+                    seniorId: connectedSeniors[0].id,
+                    seniorName: connectedSeniors[0].name
+                  });
+                } else {
+                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
+                }
+              }}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#EC4899' : '#EC4899' }]}>
                 <Ionicons name="calendar" size={20} color="#FFFFFF" />
@@ -301,7 +344,7 @@ const HomeScreenFamily = () => {
               </Text>
             </TouchableOpacity>
           </View>
-          
+
           {connectedSeniors.length > 0 ? (
             <FlatList
               data={connectedSeniors}
@@ -310,8 +353,8 @@ const HomeScreenFamily = () => {
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.seniorsList}
               renderItem={({ item }) => (
-                <TouchableOpacity 
-                  style={[styles.seniorCard, { 
+                <TouchableOpacity
+                  style={[styles.seniorCard, {
                     backgroundColor: isDark ? '#2D3748' : '#F8FAFC',
                     borderColor: isDark ? '#374151' : '#E2E8F0'
                   }]}
@@ -322,26 +365,26 @@ const HomeScreenFamily = () => {
                       <Image source={{ uri: item.avatar_url }} style={styles.avatarImage} />
                     ) : (
                       <View style={[styles.avatarPlaceholder, { backgroundColor: isDark ? '#374151' : '#E2E8F0' }]}>
-                        <Ionicons 
-                          name="person" 
-                          size={32} 
-                          color={isDark ? '#9CA3AF' : '#6B7280'} 
+                        <Ionicons
+                          name="person"
+                          size={32}
+                          color={isDark ? '#9CA3AF' : '#6B7280'}
                         />
                       </View>
                     )}
-                    <View 
+                    <View
                       style={[
-                        styles.statusDot, 
-                        { 
-                          backgroundColor: item.status === 'online' ? '#10B981' : 
-                                         item.status === 'alert' ? '#EF4444' : '#9CA3AF',
+                        styles.statusDot,
+                        {
+                          backgroundColor: item.status === 'online' ? '#10B981' :
+                            item.status === 'alert' ? '#EF4444' : '#9CA3AF',
                           borderColor: isDark ? '#1F2937' : '#F9FAFB'
                         }
-                      ]} 
+                      ]}
                     />
                   </View>
-                  <Text 
-                    style={[styles.seniorName, { color: isDark ? '#F3F4F6' : '#1F2937' }]} 
+                  <Text
+                    style={[styles.seniorName, { color: isDark ? '#F3F4F6' : '#1F2937' }]}
                     numberOfLines={1}
                   >
                     {item.name}
@@ -354,16 +397,16 @@ const HomeScreenFamily = () => {
             />
           ) : (
             <View style={styles.emptyState}>
-              <Ionicons 
-                name="people-outline" 
-                size={48} 
-                color={isDark ? '#4B5563' : '#9CA3AF'} 
+              <Ionicons
+                name="people-outline"
+                size={48}
+                color={isDark ? '#4B5563' : '#9CA3AF'}
                 style={styles.emptyIcon}
               />
               <Text style={[styles.emptyText, { color: isDark ? '#9CA3AF' : '#6B7280' }]}>
                 {t('No seniors connected yet')}
               </Text>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[styles.addButton, { backgroundColor: isDark ? '#4F46E5' : '#4F46E5' }]}
                 onPress={handleAddSenior}
               >
@@ -402,7 +445,7 @@ const HomeScreenFamily = () => {
           </View>
         </View> */}
       </ScrollView>
-    </SafeAreaView>
+    </SafeAreaView >
   );
 };
 

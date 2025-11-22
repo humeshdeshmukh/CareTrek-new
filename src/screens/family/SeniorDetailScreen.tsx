@@ -50,10 +50,11 @@ type RootStackParamList = {
   SeniorDetail: { seniorId: string };
   TrackSenior: { seniorId: string };
   Messages: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
-  Health: undefined;
-  Medication: { seniorId: string };
-  Reminders: { seniorId: string };
-  SeniorAppointments: { seniorId: string };
+  HealthMonitoring: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
+  MedicationMonitoring: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
+  ReminderMonitoring: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
+  AppointmentMonitoring: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
+  LocationMonitoring: { seniorId: string; seniorName?: string; seniorAvatar?: string; status?: string };
   Settings: undefined;
   // Add other screens as needed
   [key: string]: any;
@@ -85,6 +86,7 @@ type SeniorLocal = {
 type SeniorDetailRouteProp = RouteProp<RootStackParamList, 'SeniorDetail'>;
 
 // Navigation options configuration with improved icons and organization
+// Navigation options configuration with improved icons and organization
 const NAVIGATION_OPTIONS = [
   {
     id: 'health',
@@ -92,7 +94,7 @@ const NAVIGATION_OPTIONS = [
     icon: 'favorite-outline' as const,
     iconSet: 'MaterialIcons' as const,
     color: '#EF4444',
-    screen: 'Health' as const,
+    screen: 'HealthMonitoring' as const,
     params: (seniorId: string) => ({ seniorId })
   },
   {
@@ -101,7 +103,7 @@ const NAVIGATION_OPTIONS = [
     icon: 'medical-bag' as const,
     iconSet: 'MaterialCommunityIcons' as const,
     color: '#3B82F6',
-    screen: 'Medication' as const,
+    screen: 'MedicationMonitoring' as const,
     params: (seniorId: string) => ({ seniorId })
   },
   {
@@ -110,7 +112,7 @@ const NAVIGATION_OPTIONS = [
     icon: 'notifications-none' as const,
     iconSet: 'MaterialIcons' as const,
     color: '#F59E0B',
-    screen: 'Reminders' as const,
+    screen: 'ReminderMonitoring' as const,
     params: (seniorId: string) => ({ seniorId })
   },
   {
@@ -119,7 +121,16 @@ const NAVIGATION_OPTIONS = [
     icon: 'calendar-month' as const,
     iconSet: 'MaterialIcons' as const,
     color: '#8B5CF6',
-    screen: 'SeniorAppointments' as const,
+    screen: 'AppointmentMonitoring' as const,
+    params: (seniorId: string) => ({ seniorId })
+  },
+  {
+    id: 'location',
+    title: 'Location',
+    icon: 'location-on' as const,
+    iconSet: 'MaterialIcons' as const,
+    color: '#10B981',
+    screen: 'LocationMonitoring' as const,
     params: (seniorId: string) => ({ seniorId })
   }
 ];
@@ -140,7 +151,7 @@ const SeniorDetailScreen: React.FC = () => {
   const { isDark } = useTheme();
   const { currentLanguage } = useTranslation();
   const { user } = useAuth();
-  
+
   // Translations
   const { translatedText: loadingText } = useCachedTranslation('Loading senior...', currentLanguage);
   const { translatedText: retryText } = useCachedTranslation('Retry', currentLanguage);
@@ -148,10 +159,10 @@ const SeniorDetailScreen: React.FC = () => {
   const { translatedText: addNoteText } = useCachedTranslation('Add Note', currentLanguage);
   const { translatedText: saveText } = useCachedTranslation('Save', currentLanguage);
   const { translatedText: cancelText } = useCachedTranslation('Cancel', currentLanguage);
-  
+
   // Get seniorId from route params with a default value
   const seniorId = route.params?.seniorId || 'default-senior-id';
-  
+
   // State hooks
   const [senior, setSenior] = useState<SeniorLocal | null>(null);
   const [loading, setLoading] = useState(true);
@@ -160,17 +171,17 @@ const SeniorDetailScreen: React.FC = () => {
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   // Use the senior data context
-  const { 
-    seniorData, 
-    loading: dataLoading, 
-    error: dataError, 
-    saveData, 
-    deleteData, 
-    refreshData 
+  const {
+    seniorData,
+    loading: dataLoading,
+    error: dataError,
+    saveData,
+    deleteData,
+    refreshData
   } = useSeniorData();
-  
+
   // Format the notes data for display
   const notes = useMemo(() => {
     if (!seniorData) return [];
@@ -183,11 +194,11 @@ const SeniorDetailScreen: React.FC = () => {
       isEditable: item.family_member_id === user?.id
     }));
   }, [seniorData, user?.id]);
-  
+
   // Handle adding a new note
   const handleAddNote = async () => {
     if (!newNote.trim()) return;
-    
+
     setIsSubmitting(true);
     try {
       const noteData = {
@@ -196,7 +207,7 @@ const SeniorDetailScreen: React.FC = () => {
         type: 'note',
         createdAt: new Date().toISOString()
       };
-      
+
       await saveData(seniorId, noteData);
       setNewNote('');
       setIsAddingNote(false);
@@ -208,7 +219,7 @@ const SeniorDetailScreen: React.FC = () => {
       setIsSubmitting(false);
     }
   };
-  
+
   // Handle deleting a note
   const handleDeleteNote = async (id: string) => {
     try {
@@ -219,7 +230,7 @@ const SeniorDetailScreen: React.FC = () => {
       Alert.alert('Error', 'Failed to delete note. Please try again.');
     }
   };
-  
+
   // Render a single note item
   const renderNoteItem = ({ item }: { item: SeniorDataItem }) => (
     <View style={[styles.noteCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
@@ -256,7 +267,7 @@ const SeniorDetailScreen: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       // Fetch senior profile from profiles table
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
@@ -265,14 +276,14 @@ const SeniorDetailScreen: React.FC = () => {
         .single();
 
       if (profileError) throw profileError;
-      
+
       // Fetch senior details from seniors table if available
       const { data: seniorData, error: seniorError } = await supabase
         .from('seniors')
         .select('*')
         .eq('user_id', seniorId)
         .single();
-      
+
       // If there's an error fetching senior data, just log it and continue with profile data
       if (seniorError) {
         console.warn('Error fetching senior details:', seniorError);
@@ -290,14 +301,14 @@ const SeniorDetailScreen: React.FC = () => {
         email: profileData.email || '',
         phone: profileData.phone_number || 'Phone not set'
       };
-      
+
       setSenior(seniorProfile);
       setLoading(false);
     } catch (err) {
       console.error('Error fetching senior details:', err);
       setError('Failed to load senior details');
       setLoading(false);
-      
+
       // Set a default senior if there's an error
       setSenior({
         id: seniorId,
@@ -312,19 +323,19 @@ const SeniorDetailScreen: React.FC = () => {
       });
     }
   }, [seniorId]);
-  
+
   // Load senior data on mount
   useEffect(() => {
     let isMounted = true;
-    
+
     const loadData = async () => {
       if (isMounted) {
         await fetchSeniorDetails();
       }
     };
-    
+
     loadData();
-    
+
     return () => {
       isMounted = false;
     };
@@ -332,15 +343,15 @@ const SeniorDetailScreen: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    
+
     const loadData = async () => {
       if (isMounted) {
         await fetchSeniorDetails();
       }
     };
-    
+
     loadData();
-    
+
     // Set up a simple interval to simulate real-time updates
     const intervalId = setInterval(() => {
       if (isMounted) {
@@ -350,7 +361,7 @@ const SeniorDetailScreen: React.FC = () => {
         }));
       }
     }, 60000); // Update every minute
-    
+
     return () => {
       isMounted = false;
       clearInterval(intervalId);
@@ -359,18 +370,18 @@ const SeniorDetailScreen: React.FC = () => {
 
   const toggleConnection = useCallback(async () => {
     if (!senior) return;
-    
+
     const newStatus = !isConnected;
     // Use 'accepted'/'rejected' to match the database constraint
     const statusValue = newStatus ? 'accepted' : 'rejected';
-    
-    console.log('Toggling connection status:', { 
-      seniorId, 
-      newStatus, 
+
+    console.log('Toggling connection status:', {
+      seniorId,
+      newStatus,
       statusValue,
-      currentIsConnected: isConnected 
+      currentIsConnected: isConnected
     });
-    
+
     try {
       // First, check the current connection status
       const { data: currentConnection, error: fetchError } = await supabase
@@ -378,14 +389,14 @@ const SeniorDetailScreen: React.FC = () => {
         .select('*')
         .eq('senior_user_id', seniorId)
         .single();
-        
+
       console.log('Current connection data:', currentConnection);
-      
+
       if (fetchError && !fetchError.message.includes('No rows found')) {
         console.error('Error fetching current connection:', fetchError);
         throw fetchError;
       }
-      
+
       // If no connection exists yet, create one
       if (!currentConnection) {
         console.log('No existing connection found, creating new one');
@@ -398,33 +409,33 @@ const SeniorDetailScreen: React.FC = () => {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });
-        
+
         if (insertError) throw insertError;
       } else {
         // Update existing connection
         console.log('Updating status to:', statusValue);
         const { error: updateError } = await supabase
           .from('family_connections')
-          .update({ 
+          .update({
             status: statusValue,
             updated_at: new Date().toISOString()
           })
           .eq('senior_user_id', seniorId);
-        
+
         if (updateError) throw updateError;
       }
-      
+
       // Update local state
       setIsConnected(newStatus);
-      
+
       setSenior(prev => prev ? {
         ...prev,
         status: newStatus ? 'online' : 'offline',
         lastActive: new Date().toISOString()
       } : null);
-      
+
       console.log(`Successfully ${newStatus ? 'connected to' : 'disconnected from'} senior:`, senior.name);
-      
+
     } catch (err) {
       console.error('Error updating connection status:', err);
       // Revert the toggle if there's an error
@@ -457,27 +468,27 @@ const SeniorDetailScreen: React.FC = () => {
       </SafeAreaView>
     );
   }
-  
+
   if (!senior) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#171923' : '#FFFBEF' }]}>
         <View style={styles.centered}>
-          <Ionicons 
-            name="warning" 
-            size={48} 
-            color={isDark ? '#F56565' : '#DC2626'} 
+          <Ionicons
+            name="warning"
+            size={48}
+            color={isDark ? '#F56565' : '#DC2626'}
           />
           <Text style={[styles.muted, { marginTop: 16, color: isDark ? '#E2E8F0' : '#4A5568' }]}>
             No senior data available
           </Text>
-          <TouchableOpacity 
-            style={[styles.button, { 
+          <TouchableOpacity
+            style={[styles.button, {
               backgroundColor: isDark ? '#48BB78' : '#2F855A',
               marginTop: 16,
               paddingVertical: 12,
               paddingHorizontal: 24,
               borderRadius: 8
-            }]} 
+            }]}
             onPress={fetchSeniorDetails}
           >
             <Text style={[styles.buttonText, { color: 'white' }]}>
@@ -494,19 +505,19 @@ const SeniorDetailScreen: React.FC = () => {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#171923' : '#FFFBEF' }]}>
         <View style={styles.centered}>
-          <Ionicons 
-            name="warning" 
-            size={56} 
-            color={isDark ? '#F56565' : '#DC2626'} 
+          <Ionicons
+            name="warning"
+            size={56}
+            color={isDark ? '#F56565' : '#DC2626'}
           />
           <Text style={[styles.errorText, { color: isDark ? '#F56565' : '#DC2626', marginTop: 12 }]}>
             {errorText}
           </Text>
-          <TouchableOpacity 
-            style={[styles.button, styles.primaryButton, { 
+          <TouchableOpacity
+            style={[styles.button, styles.primaryButton, {
               backgroundColor: isDark ? '#48BB78' : '#2F855A',
               marginTop: 24
-            }]} 
+            }]}
             onPress={fetchSeniorDetails}
           >
             <Text style={[styles.buttonText, { color: 'white' }]}>
@@ -527,7 +538,7 @@ const SeniorDetailScreen: React.FC = () => {
       seniorAvatar: senior.avatar,
       status: senior.status
     };
-    
+
     return {
       ...option,
       onPress: () => {
@@ -536,13 +547,13 @@ const SeniorDetailScreen: React.FC = () => {
       }
     };
   });
-  
+
   // Render icon based on iconSet with proper typing
   const renderIcon = (icon: string, iconSet?: string, size = 24, color = '#4B5563') => {
     const iconSize = size as number;
     const iconColor = color as string;
-    
-    switch(iconSet) {
+
+    switch (iconSet) {
       case 'MaterialIcons':
         return <MaterialIcons name={icon as any} size={iconSize} color={iconColor} />;
       case 'MaterialCommunityIcons':
@@ -554,10 +565,10 @@ const SeniorDetailScreen: React.FC = () => {
     }
   };
 
-// ... rest of the code remains the same ...
+  // ... rest of the code remains the same ...
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#0F172A' : '#F8FAFC' }]}>
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingTop: 16 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -575,21 +586,21 @@ const SeniorDetailScreen: React.FC = () => {
           <View style={styles.profileHeader}>
             <View style={styles.avatarContainer}>
               {senior.avatar ? (
-                <Image 
-                  source={{ uri: senior.avatar }} 
-                  style={styles.avatar} 
+                <Image
+                  source={{ uri: senior.avatar }}
+                  style={styles.avatar}
                 />
               ) : (
                 <DefaultAvatar size={80} />
               )}
-              <View 
-                style={[styles.statusBadge, { 
+              <View
+                style={[styles.statusBadge, {
                   backgroundColor: getStatusColor(senior.status),
                   borderColor: isDark ? '#1E293B' : '#FFFFFF'
-                }]} 
+                }]}
               />
             </View>
-            
+
             <View style={styles.profileInfo}>
               <View style={styles.nameContainer}>
                 <Text style={[styles.seniorName, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
@@ -601,18 +612,18 @@ const SeniorDetailScreen: React.FC = () => {
                   </Text>
                 </View>
               </View>
-              
+
               <View style={styles.connectionStatus}>
-                <View 
-                  style={[styles.statusDot, { 
-                    backgroundColor: getStatusColor(senior.status) 
-                  }]} 
+                <View
+                  style={[styles.statusDot, {
+                    backgroundColor: getStatusColor(senior.status)
+                  }]}
                 />
                 <Text style={[styles.statusText, { color: isDark ? '#94A3B8' : '#64748B' }]}>
                   {senior.status.charAt(0).toUpperCase() + senior.status.slice(1)}
                 </Text>
               </View>
-              
+
               <View style={styles.connectionSwitch}>
                 <Text style={[styles.connectionText, { color: isDark ? '#E2E8F0' : '#4B5563' }]}>
                   {isConnected ? 'Connected' : 'Disconnected'}
@@ -626,23 +637,23 @@ const SeniorDetailScreen: React.FC = () => {
               </View>
             </View>
           </View>
-          
+
           {/* Contact Information */}
           <View style={styles.contactInfo}>
             <View style={styles.sectionHeader}>
-              <Ionicons 
-                name="call-outline" 
-                size={20} 
-                color={isDark ? '#94A3B8' : '#64748B'} 
+              <Ionicons
+                name="call-outline"
+                size={20}
+                color={isDark ? '#94A3B8' : '#64748B'}
               />
               <Text style={[styles.sectionTitle, { color: isDark ? '#E2E8F0' : '#4B5563' }]}>
                 Contact
               </Text>
             </View>
-            
+
             <View style={[styles.contactGrid, { justifyContent: 'flex-start' }]}>
-              <TouchableOpacity 
-                style={[styles.contactItem, { 
+              <TouchableOpacity
+                style={[styles.contactItem, {
                   backgroundColor: isDark ? '#1E293B' : '#F8FAFC',
                   width: '100%', // Make it full width
                   flexDirection: 'row',
@@ -667,10 +678,10 @@ const SeniorDetailScreen: React.FC = () => {
                   marginRight: 12,
                   backgroundColor: isDark ? '#0F172A' : '#EFF6FF'
                 }]}>
-                  <Ionicons 
-                    name="call" 
-                    size={20} 
-                    color={isDark ? '#60A5FA' : '#3B82F6'} 
+                  <Ionicons
+                    name="call"
+                    size={20}
+                    color={isDark ? '#60A5FA' : '#3B82F6'}
                   />
                 </View>
                 <View style={{
@@ -693,10 +704,10 @@ const SeniorDetailScreen: React.FC = () => {
                   </Text>
                 </View>
                 {senior.phone && (
-                  <Ionicons 
-                    name="chevron-forward" 
-                    size={20} 
-                    color={isDark ? '#4B5563' : '#9CA3AF'} 
+                  <Ionicons
+                    name="chevron-forward"
+                    size={20}
+                    color={isDark ? '#4B5563' : '#9CA3AF'}
                   />
                 )}
               </TouchableOpacity>
@@ -713,13 +724,13 @@ const SeniorDetailScreen: React.FC = () => {
             {navigationOptions.slice(0, 4).map((option) => {
               const renderNavigationIcon = (opt: typeof NAVIGATION_OPTIONS[0]) => {
                 const { icon, color, iconSet } = opt;
-                
+
                 const iconProps = {
                   name: icon as any,
                   size: 24 as number,
                   color: color as string
                 };
-                
+
                 return (
                   <View key={`icon-${opt.id}`} style={[styles.quickActionIcon, { backgroundColor: `${color}15` }]}>
                     {iconSet === 'MaterialIcons' ? (
@@ -751,13 +762,13 @@ const SeniorDetailScreen: React.FC = () => {
             })}
           </View>
         </View>
-        
+
         {/* Last Seen */}
         <View style={[styles.lastSeenContainer, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF' }]}>
-          <Ionicons 
-            name="time-outline" 
-            size={16} 
-            color={isDark ? '#94A3B8' : '#64748B'} 
+          <Ionicons
+            name="time-outline"
+            size={16}
+            color={isDark ? '#94A3B8' : '#64748B'}
           />
           <Text style={[styles.lastSeenText, { color: isDark ? '#94A3B8' : '#64748B' }]}>
             Last active: {formatLastSeen(senior.lastActive)}
@@ -773,7 +784,7 @@ const formatLastSeen = (dateString: string) => {
   const date = new Date(dateString);
   const now = new Date();
   const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
-  
+
   if (diffInHours < 1) {
     const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
     return `${diffInMinutes} min ago`;
@@ -839,7 +850,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginRight: 8,
   },
-  
+
   // Profile Card
   profileCard: {
     margin: 16,
@@ -938,7 +949,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  
+
   // Contact Information
   contactInfo: {
     marginTop: 16,
@@ -984,7 +995,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-  
+
   // Quick Actions
   quickActions: {
     marginTop: 8,
@@ -1020,7 +1031,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  
+
   // More Options
   moreOptions: {
     margin: 16,
@@ -1086,16 +1097,6 @@ const styles = StyleSheet.create({
   section: {
     marginTop: 24,
     marginHorizontal: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
   },
   addButton: {
     padding: 8,

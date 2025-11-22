@@ -32,8 +32,32 @@ export const homeLocationService = {
   },
 
   // Save or update home location
-  async saveHomeLocation(location: Omit<HomeLocation, 'id' | 'created_at' | 'updated_at'>): Promise<HomeLocation | null> {
+  async saveHomeLocation(
+    userIdOrLocation: string | Omit<HomeLocation, 'id' | 'created_at' | 'updated_at'>,
+    latitude?: number,
+    longitude?: number,
+    address?: string
+  ): Promise<HomeLocation | null> {
     try {
+      // Handle both signatures
+      let location: Omit<HomeLocation, 'id' | 'created_at' | 'updated_at'>;
+
+      if (typeof userIdOrLocation === 'string') {
+        // New signature: (userId, latitude, longitude, address)
+        if (latitude === undefined || longitude === undefined || address === undefined) {
+          throw new Error('Invalid parameters');
+        }
+        location = {
+          user_id: userIdOrLocation,
+          latitude,
+          longitude,
+          address,
+        };
+      } else {
+        // Old signature: (locationObject)
+        location = userIdOrLocation;
+      }
+
       const { data: existing } = await supabase
         .from('home_locations')
         .select('id')
@@ -41,7 +65,7 @@ export const homeLocationService = {
         .single();
 
       let data, error;
-      
+
       if (existing) {
         // Update existing
         const { data: updateData, error: updateError } = await supabase
@@ -55,7 +79,7 @@ export const homeLocationService = {
           .eq('id', existing.id)
           .select()
           .single();
-        
+
         data = updateData;
         error = updateError;
       } else {
@@ -65,7 +89,7 @@ export const homeLocationService = {
           .insert([location])
           .select()
           .single();
-        
+
         data = insertData;
         error = insertError;
       }
