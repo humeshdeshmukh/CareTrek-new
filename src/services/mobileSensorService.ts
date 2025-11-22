@@ -193,30 +193,13 @@ class MobileSensorService {
 
   /**
    * Simulate steps when pedometer is not available
-   * This provides fallback data so steps/calories are always available
+   * REMOVED: User requested no simulated/fake data
    */
   private simulateSteps() {
-    try {
-      // Simulate 30-50 steps per collection interval (every 30s)
-      const simulatedSteps = Math.floor(Math.random() * 20) + 30;
-      this.dailySteps += simulatedSteps;
-
-      // Calculate calories from simulated steps
-      const newCalories = this.calculateCalories(simulatedSteps);
-      this.dailyCalories += newCalories;
-
-      console.log('[MobileSensor] Simulated steps (fallback):', {
-        simulatedSteps,
-        totalSteps: this.dailySteps,
-        calories: newCalories,
-        totalCalories: this.dailyCalories,
-      });
-
-      // Save to storage
-      this.saveTodayData().catch(e => console.warn('[MobileSensor] Save error:', e));
-    } catch (error) {
-      console.error('[MobileSensor] Simulation error:', error);
-    }
+    // User explicitly requested NO simulated steps
+    // Just log and do nothing
+    console.log('[MobileSensor] Pedometer not available - simulation disabled by user request');
+    return;
   }
 
   /**

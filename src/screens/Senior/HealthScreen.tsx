@@ -1,11 +1,11 @@
 // src/screens/Senior/HealthScreen.new.tsx
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  ScrollView, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
   Dimensions,
   RefreshControl,
   ActivityIndicator,
@@ -51,11 +51,11 @@ const HealthScreen = () => {
     isScanning = false,
     connectionState = 'idle',
     syncDeviceData = async () => ({}),
-    disconnectDevice = () => {},
+    disconnectDevice = () => { },
     isSyncing = false,
-    startScan = () => {},
-    stopScan = () => {},
-    connectToDevice = () => {},
+    startScan = () => { },
+    stopScan = () => { },
+    connectToDevice = () => { },
     bleService,
     mobileSensorService,
   } = useBLEWatchV2();
@@ -77,7 +77,7 @@ const HealthScreen = () => {
     const mergeData = async () => {
       try {
         if (!isMounted) return;
-        
+
         console.log('[HealthScreen] watchData received:', {
           status: watchData?.status,
           heartRate: watchData?.heartRate,
@@ -88,7 +88,7 @@ const HealthScreen = () => {
           sleepData: watchData?.sleepData,
           battery: watchData?.battery,
         });
-        
+
         if (!mobileSensorService) {
           console.log('[HealthScreen] Mobile sensor service not available');
           if (isMounted) {
@@ -101,13 +101,14 @@ const HealthScreen = () => {
         }
 
         const mobileData = mobileSensorService.getTodayData?.() || { steps: 0, calories: 0 };
-        
-        // Show watch data, but use mobile sensor as fallback for steps/calories only
+
+        // Show watch data ONLY - User requested NO fallback to mobile sensors
         const merged = {
           status: watchData?.status || 'disconnected',
           heartRate: watchData?.heartRate !== undefined ? watchData.heartRate : undefined,
-          steps: watchData?.steps !== undefined && watchData.steps > 0 ? watchData.steps : (mobileData?.steps || 0),
-          calories: watchData?.calories !== undefined && watchData.calories > 0 ? watchData.calories : (mobileData?.calories || 0),
+          // REMOVED FALLBACK: Use watch data only, or 0 if undefined
+          steps: watchData?.steps !== undefined ? watchData.steps : 0,
+          calories: watchData?.calories !== undefined ? watchData.calories : 0,
           oxygenSaturation: watchData?.oxygenSaturation !== undefined ? watchData.oxygenSaturation : undefined,
           bloodPressure: watchData?.bloodPressure !== undefined ? watchData.bloodPressure : undefined,
           sleepData: watchData?.sleepData !== undefined ? watchData.sleepData : undefined,
@@ -117,7 +118,7 @@ const HealthScreen = () => {
           battery: watchData?.battery !== undefined ? watchData.battery : undefined,
           hydration: watchData?.hydration !== undefined ? watchData.hydration : undefined,
         };
-        
+
         console.log('[HealthScreen] Watch data with mobile fallback for steps/calories:', {
           watchHeartRate: watchData?.heartRate,
           watchSteps: watchData?.steps,
@@ -133,7 +134,7 @@ const HealthScreen = () => {
           setDisplayData(merged);
           console.log('[HealthScreen] displayData updated:', merged);
         }
-        
+
         console.log('[HealthScreen] Data merged:', {
           status: merged.status,
           heartRate: merged.heartRate,
@@ -177,23 +178,37 @@ const HealthScreen = () => {
   const saveDeviceToStorage = useCallback(async (device: any) => {
     try {
       const existing = await AsyncStorage.getItem(STORAGE_KEY);
-      const devices = existing ? JSON.parse(existing) : [];
-      
+      let devices: any[] = [];
+
+      // SAFETY FIX (Bug #5): Wrap JSON.parse to handle corrupted data
+      if (existing) {
+        try {
+          const parsed = JSON.parse(existing);
+          if (Array.isArray(parsed)) {
+            devices = parsed;
+          } else {
+            console.warn('[HealthScreen] Corrupted device storage, resetting');
+          }
+        } catch (parseError) {
+          console.error('[HealthScreen] JSON parse error, resetting:', parseError);
+        }
+      }
+
       // Remove if already exists
-      const filtered = devices.filter((d: any) => d.id !== device.id);
-      
+      const filtered = devices.filter((d: any) => d?.id !== device?.id);
+
       // Add to front
       const updated = [
         { id: device.id, name: device.name, timestamp: Date.now() },
         ...filtered
       ].slice(0, 5); // Keep last 5 devices
-      
+
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       if (isMountedRef.current) {
         setRecentDevices(updated);
       }
     } catch (err) {
-      console.error('Error saving device:', err);
+      console.error('[HealthScreen] Error saving device:', err);
     }
   }, []);
 
@@ -202,23 +217,54 @@ const HealthScreen = () => {
     try {
       const stored = await AsyncStorage.getItem(STORAGE_KEY);
       if (stored && isMountedRef.current) {
-        const devices = JSON.parse(stored);
-        setRecentDevices(devices);
+        // SAFETY FIX (Bug #5): Wrap JSON.parse to handle corrupted data
+        try {
+          const devices = JSON.parse(stored);
+          if (Array.isArray(devices)) {
+            setRecentDevices(devices);
+          } else {
+            console.warn('[HealthScreen] Invalid device storage format, resetting');
+            setRecentDevices([]);
+          }
+        } catch (parseError) {
+          console.error('[HealthScreen] JSON parse error loading devices:', parseError);
+          setRecentDevices([]);
+        }
       }
     } catch (err) {
-      console.error('Error loading devices:', err);
+      console.error('[HealthScreen] Error loading devices:', err);
     }
   }, []);
 
   // Load background metrics count
   const loadBackgroundMetricsCount = useCallback(async () => {
     try {
-      const metrics = await watchData.backgroundDataService?.getStoredMetrics?.() || [];
-      if (isMountedRef.current) {
+      // SAFETY FIX (Bug #2): Check if backgroundDataService exists before calling
+      if (!watchData?.backgroundDataService) {
+        console.log('[HealthScreen] backgroundDataService not available');
+        if (isMountedRef.current) {
+          setBackgroundMetricsCount(0);
+        }
+        return;
+      }
+
+      if (typeof watchData.backgroundDataService.getStoredMetrics !== 'function') {
+        console.warn('[HealthScreen] getStoredMetrics not available');
+        if (isMountedRef.current) {
+          setBackgroundMetricsCount(0);
+        }
+        return;
+      }
+
+      const metrics = await watchData.backgroundDataService.getStoredMetrics();
+      if (isMountedRef.current && Array.isArray(metrics)) {
         setBackgroundMetricsCount(metrics.length);
       }
     } catch (err) {
-      console.error('Error loading background metrics count:', err);
+      console.error('[HealthScreen] Error loading background metrics count:', err);
+      if (isMountedRef.current) {
+        setBackgroundMetricsCount(0);
+      }
     }
   }, [watchData]);
 
@@ -229,9 +275,24 @@ const HealthScreen = () => {
       return;
     }
 
+    // SAFETY FIX (Bug #3): Check if sync function exists
+    if (typeof syncBackgroundMetricsToDatabase !== 'function') {
+      console.error('[HealthScreen] syncBackgroundMetricsToDatabase not available');
+      Alert.alert('Error', 'Sync service not available');
+      return;
+    }
+
     setIsSyncingBackground(true);
     try {
-      const result = await syncBackgroundMetricsToDatabase(userId);
+      // SAFETY FIX (Bug #6): Add timeout to prevent hanging
+      const syncPromise = syncBackgroundMetricsToDatabase(userId);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Sync timeout after 30s')), 30000)
+      );
+
+      const result = await Promise.race([syncPromise, timeoutPromise]) as any;
+
+      // SAFETY FIX (Bug #6): Only show alerts if component is still mounted
       if (isMountedRef.current) {
         if (result.success) {
           Alert.alert('Success', `Synced ${result.synced} metric collections to database`);
@@ -239,13 +300,18 @@ const HealthScreen = () => {
         } else {
           Alert.alert('Partial Sync', `Synced ${result.synced}, Failed ${result.failed}`);
         }
+      } else {
+        console.log('[HealthScreen] Sync completed but component unmounted, skipping alert');
       }
     } catch (err) {
-      console.error('Error syncing background metrics:', err);
+      console.error('[HealthScreen] Error syncing background metrics:', err);
+      // SAFETY FIX (Bug #6): Only show alert if component is still mounted
       if (isMountedRef.current) {
-        Alert.alert('Error', 'Failed to sync background metrics');
+        const errorMsg = err instanceof Error ? err.message : 'Failed to sync background metrics';
+        Alert.alert('Error', errorMsg);
       }
     } finally {
+      // SAFETY: Only update state if still mounted
       if (isMountedRef.current) {
         setIsSyncingBackground(false);
       }
@@ -255,16 +321,17 @@ const HealthScreen = () => {
 
   // Cleanup on component unmount - PRODUCTION LEVEL
   // CRITICAL: Don't set isMountedRef to false - it causes watch disconnection
+  // Cleanup on component unmount - PRODUCTION LEVEL
   useEffect(() => {
     console.log('[HealthScreen] Component mounted');
+    isMountedRef.current = true;
 
     return () => {
       try {
-        console.log('[HealthScreen] Component unmounting - keeping watch connection alive');
-        // CRITICAL: Don't modify isMountedRef here!
-        // This is managed by individual useEffect hooks with local isMounted flags
-        // Setting isMountedRef to false here causes the watch to disconnect
-        
+        console.log('[HealthScreen] Component unmounting');
+        // SAFETY FIX: Must set isMountedRef to false to prevent state updates
+        isMountedRef.current = false;
+
         // Stop any pending operations
         setRefreshing(false);
         setShowDeviceModal(false);
@@ -276,8 +343,6 @@ const HealthScreen = () => {
   }, []);
 
   // Navigation-level cleanup - PRODUCTION LEVEL FIX
-  // IMPORTANT: Don't disconnect watch when navigating away
-  // Only manage UI state, not connection state
   useFocusEffect(
     useCallback(() => {
       try {
@@ -286,18 +351,17 @@ const HealthScreen = () => {
 
         return () => {
           try {
-            console.log('[HealthScreen] useFocusEffect cleanup - Screen blurred (keeping connection alive)');
-            // CRITICAL: Don't set isMountedRef to false here!
-            // This prevents state updates but ALSO causes watch to disconnect
-            // Instead, we'll handle state updates safely with try-catch
-            // isMountedRef.current = false; // REMOVED - causes watch disconnection
+            console.log('[HealthScreen] useFocusEffect cleanup - Screen blurred');
+            // SAFETY FIX: Set isMountedRef to false when screen loses focus
+            // This prevents state updates on unmounted/blurred screen
+            isMountedRef.current = false;
           } catch (err) {
             console.error('[HealthScreen] useFocusEffect cleanup error:', err);
           }
         };
       } catch (err) {
         console.error('[HealthScreen] useFocusEffect error:', err);
-        return () => {};
+        return () => { };
       }
     }, [])
   );
@@ -305,10 +369,10 @@ const HealthScreen = () => {
   // Monitor connection state changes (new feature from useBLEWatchV2)
   useEffect(() => {
     if (!bleService) return;
-    
+
     const unsubscribe = bleService.onStateChange((state) => {
       console.log('[HealthScreen] BLE connection state:', state);
-      
+
       // Set waiting for data when connected
       if (state === 'connected') {
         setIsWaitingForData(true);
@@ -472,15 +536,15 @@ const HealthScreen = () => {
   );
 
   // Metric Card Component - Safe rendering with error handling
-  const MetricCard = ({ 
-    icon, 
-    label, 
-    value, 
-    unit, 
-    color, 
+  const MetricCard = ({
+    icon,
+    label,
+    value,
+    unit,
+    color,
     status,
-    onPress 
-  }: { 
+    onPress
+  }: {
     icon: string;
     label: string;
     value: string | number;
@@ -679,10 +743,10 @@ const HealthScreen = () => {
       {displayData?.battery !== undefined && (
         <View style={[styles.batteryCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
           <View style={styles.batteryHeader}>
-            <MaterialCommunityIcons 
-              name={(displayData?.battery ?? 0) > 50 ? 'battery' : (displayData?.battery ?? 0) > 20 ? 'battery-50' : 'battery-alert'} 
-              size={24} 
-              color={(displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E'} 
+            <MaterialCommunityIcons
+              name={(displayData?.battery ?? 0) > 50 ? 'battery' : (displayData?.battery ?? 0) > 20 ? 'battery-50' : 'battery-alert'}
+              size={24}
+              color={(displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E'}
             />
             <View style={styles.batteryInfo}>
               <Text style={[styles.batteryLabel, { color: isDark ? '#A0AEC0' : '#718096' }]}>
@@ -693,14 +757,14 @@ const HealthScreen = () => {
               </Text>
             </View>
             <View style={[styles.batteryBar, { backgroundColor: isDark ? '#404854' : '#E2E8F0' }]}>
-              <View 
+              <View
                 style={[
-                  styles.batteryFill, 
-                  { 
+                  styles.batteryFill,
+                  {
                     width: `${displayData?.battery ?? 0}%`,
                     backgroundColor: (displayData?.battery ?? 0) > 50 ? '#48BB78' : (displayData?.battery ?? 0) > 20 ? '#D69E2E' : '#E53E3E'
                   }
-                ]} 
+                ]}
               />
             </View>
           </View>
@@ -833,12 +897,12 @@ const HealthScreen = () => {
               renderItem={({ item }) => {
                 const deviceName = item.name && item.name.trim() ? item.name : 'Unknown Device';
                 const isUnknown = !item.name || !item.name.trim();
-                
+
                 return (
                   <TouchableOpacity
                     style={[
-                      styles.deviceItem, 
-                      { 
+                      styles.deviceItem,
+                      {
                         borderBottomColor: isDark ? '#2D3748' : '#E2E8F0',
                         opacity: isUnknown ? 0.7 : 1
                       }
@@ -857,15 +921,15 @@ const HealthScreen = () => {
                       }
                     }}
                   >
-                    <MaterialCommunityIcons 
-                      name={isUnknown ? 'bluetooth' : 'watch'} 
-                      size={24} 
-                      color={isUnknown ? (isDark ? '#A0AEC0' : '#94A3B8') : (isDark ? '#48BB78' : '#2F855A')} 
+                    <MaterialCommunityIcons
+                      name={isUnknown ? 'bluetooth' : 'watch'}
+                      size={24}
+                      color={isUnknown ? (isDark ? '#A0AEC0' : '#94A3B8') : (isDark ? '#48BB78' : '#2F855A')}
                     />
                     <View style={styles.deviceItemInfo}>
                       <Text style={[
-                        styles.deviceItemName, 
-                        { 
+                        styles.deviceItemName,
+                        {
                           color: isDark ? '#F8FAFC' : '#1E293B',
                           fontStyle: isUnknown ? 'italic' : 'normal'
                         }

@@ -90,7 +90,7 @@ export const useBLEWatchV2 = () => {
 
   const getRequiredAndroidPermissions = () => {
     const permissions: any[] = [];
-    
+
     if (isAndroid12Plus()) {
       permissions.push(
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
@@ -108,7 +108,7 @@ export const useBLEWatchV2 = () => {
         PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE
       );
     }
-    
+
     return permissions;
   };
 
@@ -141,8 +141,8 @@ export const useBLEWatchV2 = () => {
           'Please enable location services in your device settings to scan for Bluetooth devices.',
           [
             { text: 'Cancel', style: 'cancel' },
-            { 
-              text: 'Open Settings', 
+            {
+              text: 'Open Settings',
               onPress: () => {
                 if (Platform.OS === 'android') {
                   Linking.openSettings();
@@ -241,11 +241,11 @@ export const useBLEWatchV2 = () => {
           if (error) {
             const errorMsg = error?.message || String(error);
             console.error('[BLE-V2] Scan error:', errorMsg);
-            
+
             // Check if it's a location services error
-            if (errorMsg.includes('Location services are disabled') || 
-                errorMsg.includes('location') ||
-                errorMsg.includes('Location')) {
+            if (errorMsg.includes('Location services are disabled') ||
+              errorMsg.includes('location') ||
+              errorMsg.includes('Location')) {
               console.warn('[BLE-V2] Location services disabled - prompting user');
               Alert.alert(
                 'Location Services Required',
@@ -262,7 +262,7 @@ export const useBLEWatchV2 = () => {
             setDevices(prev => {
               // Check if device already in list
               if (prev.some(d => d.id === device.id)) return prev;
-              
+
               // Add new device and sort: paired devices first, then by name
               const updated = [...prev, device];
               updated.sort((a, b) => {
@@ -270,13 +270,13 @@ export const useBLEWatchV2 = () => {
                 const aIsPaired = a.isConnectable ?? false;
                 const bIsPaired = b.isConnectable ?? false;
                 if (aIsPaired !== bIsPaired) return bIsPaired ? 1 : -1;
-                
+
                 // Then sort by name
                 const aName = (a.name ?? a.id).toLowerCase();
                 const bName = (b.name ?? b.id).toLowerCase();
                 return aName.localeCompare(bName);
               });
-              
+
               return updated;
             });
           }
@@ -300,7 +300,7 @@ export const useBLEWatchV2 = () => {
   const connectToDevice = useCallback(async (device: Device) => {
     console.log('[BLE-V2] ===== CONNECTION START =====');
     console.log('[BLE-V2] Device:', device.name || device.id);
-    
+
     if (!isMounted.current) {
       console.warn('[BLE-V2] Component unmounted, aborting connection');
       return false;
@@ -392,14 +392,14 @@ export const useBLEWatchV2 = () => {
       try {
         console.log('[BLE-V2] [HR] Monitoring service: 0000180d-0000-1000-8000-00805f9b34fb');
         console.log('[BLE-V2] [HR] Monitoring characteristic: 00002a37-0000-1000-8000-00805f9b34fb');
-        
+
         const hrUnsubscribe = bleService.monitorCharacteristic(
           deviceId,
           '0000180d-0000-1000-8000-00805f9b34fb',
           '00002a37-0000-1000-8000-00805f9b34fb',
           (error, characteristic) => {
             console.log('[BLE-V2] [HR] Callback triggered - error:', !!error, 'characteristic:', !!characteristic);
-            
+
             try {
               if (error) {
                 console.error('[BLE-V2] [HR] Monitor error:', error?.message || error);
@@ -420,7 +420,7 @@ export const useBLEWatchV2 = () => {
                 console.log('[BLE-V2] [HR] Raw value:', characteristic.value);
                 const buf = Buffer.from(characteristic.value, 'base64');
                 console.log('[BLE-V2] [HR] Buffer length:', buf.length);
-                
+
                 if (buf.length < 2) {
                   console.warn('[BLE-V2] [HR] Buffer too short:', buf.length);
                   return;
@@ -493,7 +493,7 @@ export const useBLEWatchV2 = () => {
 
       // Step 7: Subscribe to other health metrics (if available)
       console.log('[BLE-V2] [STEP 7] Checking for additional health metrics...');
-      
+
       // Try SpO2 (silently fail if not available)
       try {
         const spo2Unsubscribe = bleService.monitorCharacteristic(
@@ -557,12 +557,18 @@ export const useBLEWatchV2 = () => {
 
       // Try Steps (silently fail if not available)
       try {
+        // SAFETY FIX: Wrap monitor setup in try-catch to prevent crashes
+        // Some devices (like FireBoltt) might not support standard UUIDs
         const stepsUnsubscribe = bleService.monitorCharacteristic(
           deviceId,
           '00001814-0000-1000-8000-00805f9b34fb',
           '00002a22-0000-1000-8000-00805f9b34fb',
           (error, characteristic) => {
-            if (error) return; // Silently skip
+            if (error) {
+              // Suppress monitor errors to prevent crashes
+              // console.warn('[BLE-V2] [Steps] Monitor error (suppressed):', error.message);
+              return;
+            }
             try {
               if (!characteristic?.value || !isMounted.current) return;
               const buf = Buffer.from(characteristic.value, 'base64');
@@ -583,7 +589,7 @@ export const useBLEWatchV2 = () => {
           console.log('[BLE-V2] [Steps] ✓ Subscribed');
         }
       } catch (e) {
-        // Silently skip
+        console.log('[BLE-V2] [Steps] Not supported or failed to subscribe');
       }
 
       // Try Calories (silently fail if not available)
@@ -593,7 +599,10 @@ export const useBLEWatchV2 = () => {
           '00001814-0000-1000-8000-00805f9b34fb',
           '00002a23-0000-1000-8000-00805f9b34fb',
           (error, characteristic) => {
-            if (error) return; // Silently skip
+            if (error) {
+              // Suppress monitor errors
+              return;
+            }
             try {
               if (!characteristic?.value || !isMounted.current) return;
               const buf = Buffer.from(characteristic.value, 'base64');
@@ -614,7 +623,7 @@ export const useBLEWatchV2 = () => {
           console.log('[BLE-V2] [Calories] ✓ Subscribed');
         }
       } catch (e) {
-        // Silently skip
+        console.log('[BLE-V2] [Calories] Not supported or failed to subscribe');
       }
 
       console.log('[BLE-V2] [STEP 7] ✓ Health metrics check complete');
@@ -625,7 +634,7 @@ export const useBLEWatchV2 = () => {
       console.log('[BLE-V2] Device:', deviceName);
       console.log('[BLE-V2] Status: Connected and monitoring');
       console.log('[BLE-V2] Waiting for data from device...');
-      
+
       // Store device reference for cleanup
       if (!connectedDeviceRef.current) {
         connectedDeviceRef.current = connectedDevice;
@@ -687,7 +696,7 @@ export const useBLEWatchV2 = () => {
     console.log('[BLE-V2] Retrying connection to:', device.name || device.id);
     setIsRetrying(true);
     setConnectionError(null);
-    
+
     try {
       const result = await connectToDevice(device);
       if (result) {
@@ -742,6 +751,11 @@ export const useBLEWatchV2 = () => {
       isMounted.current = false;
       (async () => {
         try {
+          // SAFETY FIX: Don't disconnect or destroy service on unmount
+          // This allows the connection to persist for background monitoring
+          // and prevents crashes when navigating away
+
+          /* REMOVED TO KEEP CONNECTION ALIVE
           // Disconnect device
           if (connectedDeviceRef.current) {
             try {
@@ -751,8 +765,10 @@ export const useBLEWatchV2 = () => {
             }
             connectedDeviceRef.current = null;
           }
-          
-          // Clear monitors
+          */
+
+          // Clear monitors (stop listening for UI updates)
+          // The background service should handle its own monitoring if needed
           for (const unsubscribe of monitorsRef.current) {
             try {
               unsubscribe();
@@ -761,13 +777,17 @@ export const useBLEWatchV2 = () => {
             }
           }
           monitorsRef.current = [];
-          
+
+          /* REMOVED TO KEEP SERVICE ALIVE
           // Destroy service
           try {
             await destroyImprovedBLEService();
           } catch (e) {
             console.warn('[BLE-V2] Service destroy error during cleanup:', e);
           }
+          */
+
+          console.log('[BLE-V2] Hook unmounted - monitors cleared, connection kept alive');
         } catch (e) {
           console.warn('[BLE-V2] Cleanup error:', e);
         }
@@ -791,10 +811,10 @@ export const useBLEWatchV2 = () => {
     syncDeviceData: async () => {
       try {
         if (!connectedDeviceRef.current) return { success: false, error: 'No connected device' };
-        
+
         // Get mobile sensor data (steps, calories from phone)
         const mobileData = mobileSensorService.getTodayData();
-        
+
         const dataToSync = {
           ...watchData,
           steps: mobileData.steps || watchData.steps,
