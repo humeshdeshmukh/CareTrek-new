@@ -13,7 +13,14 @@ const HealthMonitoringScreen = () => {
     const route = useRoute();
 
     // Use the standardized hook
-    const { senior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+    const { senior: defaultSenior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+
+    // Get params from route (if navigated from SeniorDetailScreen)
+    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
+
+    // Determine which senior to use (params take precedence)
+    const activeSeniorId = params?.seniorId || defaultSenior?.id;
+    const activeSeniorName = params?.seniorName || defaultSenior?.name;
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -21,12 +28,12 @@ const HealthMonitoringScreen = () => {
     const [summary, setSummary] = useState<any>(null);
 
     const fetchData = async () => {
-        if (!senior) return;
+        if (!activeSeniorId) return;
 
         try {
             const [metrics, summaryData] = await Promise.all([
-                getUserHealthMetrics(senior.id, 1), // Get latest metric
-                getHealthSummary(senior.id, 1) // Get today's summary
+                getUserHealthMetrics(activeSeniorId, 1), // Get latest metric
+                getHealthSummary(activeSeniorId, 1) // Get today's summary
             ]);
 
             setHealthData(metrics[0] || null);
@@ -40,10 +47,10 @@ const HealthMonitoringScreen = () => {
     };
 
     useEffect(() => {
-        if (senior) {
+        if (activeSeniorId) {
             fetchData();
         }
-    }, [senior]);
+    }, [activeSeniorId]);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -79,7 +86,7 @@ const HealthMonitoringScreen = () => {
         );
     }
 
-    if (noSeniors) {
+    if (noSeniors && !activeSeniorId) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <Ionicons name="people-outline" size={64} color={colors.textSecondary} />
@@ -102,7 +109,7 @@ const HealthMonitoringScreen = () => {
                 </TouchableOpacity>
                 <View>
                     <Text style={[styles.headerTitle, { color: colors.text }]}>
-                        {senior?.name}'s Health
+                        {activeSeniorName}'s Health
                     </Text>
                     <Text style={[styles.lastUpdated, { color: colors.textSecondary }]}>
                         Last updated: {lastUpdated}

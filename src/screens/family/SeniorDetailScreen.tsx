@@ -172,6 +172,13 @@ const SeniorDetailScreen: React.FC = () => {
   const [newNote, setNewNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Edit Profile State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editRelationship, setEditRelationship] = useState('');
+
   // Use the senior data context
   const {
     seniorData,
@@ -231,6 +238,74 @@ const SeniorDetailScreen: React.FC = () => {
     }
   };
 
+  // Handle opening edit profile modal
+  const handleOpenEditProfile = () => {
+    if (!senior) return;
+    setEditName(senior.name);
+    setEditPhone(senior.phone || '');
+    setEditEmail(senior.email || '');
+    setEditRelationship(senior.relationship || '');
+    setIsEditingProfile(true);
+  };
+
+  // Handle updating senior profile
+  const handleUpdateProfile = async () => {
+    if (!senior) return;
+    if (!editName.trim()) {
+      Alert.alert('Error', 'Name is required');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // 1. Update 'seniors' table
+      const { error: seniorError } = await supabase
+        .from('seniors')
+        .update({
+          name: editName,
+          phone: editPhone,
+          email: editEmail,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', senior.id);
+
+      if (seniorError) {
+        // If update fails, it might be because the record doesn't exist (e.g. registered user only)
+        // In that case we might need to create it or handle it differently.
+        // For now, let's assume if they are in the list, they have a record or we created one.
+        console.error('Error updating senior record:', seniorError);
+        throw new Error('Failed to update senior details');
+      }
+
+      // 2. Update relationship in 'family_connections'
+      if (editRelationship !== senior.relationship) {
+        const { error: connError } = await supabase
+          .from('family_connections')
+          .update({
+            connection_name: editRelationship,
+            updated_at: new Date().toISOString()
+          })
+          .eq('senior_user_id', senior.id)
+          .eq('family_user_id', user?.id);
+
+        if (connError) {
+          console.error('Error updating relationship:', connError);
+        }
+      }
+
+      // Refresh data
+      await fetchSeniorDetails();
+      setIsEditingProfile(false);
+      Alert.alert('Success', 'Profile updated successfully');
+
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      Alert.alert('Error', 'Failed to update profile. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Render a single note item
   const renderNoteItem = ({ item }: { item: SeniorDataItem }) => (
     <View style={[styles.noteCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
@@ -268,39 +343,60 @@ const SeniorDetailScreen: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      // Fetch senior profile from profiles table
+      // 1. Try to fetch from 'seniors' table first (managed seniors)
+      const { data: seniorData, error: seniorError } = await supabase
+        .from('seniors')
+        .select('*')
+        .eq('id', seniorId)
+        .maybeSingle();
+
+      if (seniorError) {
+        console.warn('Error fetching senior details from seniors table:', seniorError);
+      }
+
+      // 2. Also fetch from 'profiles' table (registered users)
+      // Note: In some cases seniorId might be the user_id, so we check both
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', seniorId)
-        .single();
+        .maybeSingle();
 
-      if (profileError) throw profileError;
-
-      // Fetch senior details from seniors table if available
-      const { data: seniorData, error: seniorError } = await supabase
-        .from('seniors')
-        .select('*')
-        .eq('user_id', seniorId)
-        .single();
-
-      // If there's an error fetching senior data, just log it and continue with profile data
-      if (seniorError) {
-        console.warn('Error fetching senior details:', seniorError);
+      if (profileError) {
+        console.warn('Error fetching profile data:', profileError);
       }
 
-      // Combine profile and senior data
+      // If neither exists, we can't show this senior properly
+      if (!seniorData && !profileData) {
+        throw new Error('Senior not found');
+      }
+
+      // Combine profile and senior data, prioritizing 'seniors' table
       const seniorProfile: SeniorLocal = {
         id: seniorId,
-        name: profileData.display_name || 'Senior',
+        name: seniorData?.name || profileData?.display_name || 'Senior',
         status: 'online', // You might want to implement actual status checking
         lastActive: new Date().toISOString(),
         location: seniorData?.address || 'Location not set',
-        avatar: profileData.avatar_url || '',
-        relationship: seniorData?.relationship || 'Senior',
-        email: profileData.email || '',
-        phone: profileData.phone_number || 'Phone not set'
+        avatar: profileData?.avatar_url || '', // Avatar usually comes from user profile
+        relationship: seniorData?.relationship || 'Senior', // This might need to come from family_connections
+        email: seniorData?.email || profileData?.email || '',
+        phone: seniorData?.phone || profileData?.phone_number || 'Phone not set'
       };
+
+      // Fetch relationship from family_connections if needed
+      if (!seniorProfile.relationship || seniorProfile.relationship === 'Senior') {
+        const { data: connectionData } = await supabase
+          .from('family_connections')
+          .select('connection_name')
+          .eq('senior_user_id', seniorId)
+          .eq('family_user_id', user?.id)
+          .maybeSingle();
+
+        if (connectionData?.connection_name) {
+          seniorProfile.relationship = connectionData.connection_name;
+        }
+      }
 
       setSenior(seniorProfile);
       setLoading(false);
@@ -322,7 +418,7 @@ const SeniorDetailScreen: React.FC = () => {
         phone: 'Phone not available'
       });
     }
-  }, [seniorId]);
+  }, [seniorId, user?.id]);
 
   // Load senior data on mount
   useEffect(() => {
@@ -606,11 +702,14 @@ const SeniorDetailScreen: React.FC = () => {
                 <Text style={[styles.seniorName, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
                   {senior.name}
                 </Text>
-                <View style={[styles.relationshipBadge, { backgroundColor: isDark ? '#334155' : '#F1F5F9' }]}>
-                  <Text style={[styles.relationship, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-                    {senior.relationship}
-                  </Text>
-                </View>
+                <TouchableOpacity onPress={handleOpenEditProfile} style={{ marginLeft: 8 }}>
+                  <Ionicons name="pencil" size={16} color={isDark ? '#94A3B8' : '#64748B'} />
+                </TouchableOpacity>
+              </View>
+              <View style={[styles.relationshipBadge, { backgroundColor: isDark ? '#334155' : '#F1F5F9', alignSelf: 'flex-start', marginTop: 4 }]}>
+                <Text style={[styles.relationship, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+                  {senior.relationship}
+                </Text>
               </View>
 
               <View style={styles.connectionStatus}>
@@ -775,7 +874,103 @@ const SeniorDetailScreen: React.FC = () => {
           </Text>
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      {/* Edit Profile Modal */}
+      {
+        isEditingProfile && (
+          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+            <View style={[styles.modalContent, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF' }]}>
+              <Text style={[styles.modalTitle, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
+                Edit Profile
+              </Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>Name</Text>
+                <TextInput
+                  style={[styles.input, {
+                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+                    color: isDark ? '#F8FAFC' : '#1E293B',
+                    borderColor: isDark ? '#334155' : '#E2E8F0'
+                  }]}
+                  value={editName}
+                  onChangeText={setEditName}
+                  placeholder="Senior Name"
+                  placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>Relationship</Text>
+                <TextInput
+                  style={[styles.input, {
+                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+                    color: isDark ? '#F8FAFC' : '#1E293B',
+                    borderColor: isDark ? '#334155' : '#E2E8F0'
+                  }]}
+                  value={editRelationship}
+                  onChangeText={setEditRelationship}
+                  placeholder="e.g. Father, Mother"
+                  placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>Phone</Text>
+                <TextInput
+                  style={[styles.input, {
+                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+                    color: isDark ? '#F8FAFC' : '#1E293B',
+                    borderColor: isDark ? '#334155' : '#E2E8F0'
+                  }]}
+                  value={editPhone}
+                  onChangeText={setEditPhone}
+                  keyboardType="phone-pad"
+                  placeholder="Phone Number"
+                  placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>Email</Text>
+                <TextInput
+                  style={[styles.input, {
+                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+                    color: isDark ? '#F8FAFC' : '#1E293B',
+                    borderColor: isDark ? '#334155' : '#E2E8F0'
+                  }]}
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholder="Email Address"
+                  placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+                />
+              </View>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: isDark ? '#334155' : '#E2E8F0' }]}
+                  onPress={() => setIsEditingProfile(false)}
+                >
+                  <Text style={[styles.modalButtonText, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: isDark ? '#48BB78' : '#2F855A' }]}
+                  onPress={handleUpdateProfile}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.modalButtonText, { color: '#FFFFFF' }]}>Save</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )
+      }
+    </SafeAreaView >
   );
 };
 
@@ -799,6 +994,63 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    width: '90%',
+    borderRadius: 16,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 24,
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   centered: {
     flex: 1,

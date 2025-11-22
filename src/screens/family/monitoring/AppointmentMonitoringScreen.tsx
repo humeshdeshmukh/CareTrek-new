@@ -27,12 +27,17 @@ import {
     addAppointment as addAppointmentAPI,
     updateAppointment as updateAppointmentAPI,
 } from '../../../api/appointment';
+import { useConnectedSenior } from '../../../hooks/useConnectedSenior';
 
 const AppointmentMonitoringScreen = () => {
     const { colors, isDark } = useTheme();
     const navigation = useNavigation();
     const route = useRoute();
-    const { seniorId, seniorName } = route.params as { seniorId: string; seniorName: string };
+
+    const { senior: defaultSenior } = useConnectedSenior();
+    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
+    const seniorId = params?.seniorId || defaultSenior?.id || '';
+    const seniorName = params?.seniorName || defaultSenior?.name || 'Senior';
 
     const [appointments, setAppointments] = useState<Appointment[]>([]);
     const [loading, setLoading] = useState(true);

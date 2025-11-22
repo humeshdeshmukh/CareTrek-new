@@ -35,22 +35,23 @@ export const useConnectedSenior = () => {
                 if (relationships && relationships.length > 0) {
                     const firstSeniorId = relationships[0].senior_user_id;
 
-                    // Fetch senior profile details
-                    const { data: profile, error: profileError } = await supabase
+                    // Fetch senior profile details from both tables
+                    const { data: profile } = await supabase
                         .from('user_profiles')
-                        .select('full_name, email, phone')
+                        .select('full_name, email')
                         .eq('id', firstSeniorId)
                         .maybeSingle();
 
-                    // If profile fetch fails, we might still want to return the ID
-                    // but let's log it.
-                    if (profileError) console.warn('Error fetching senior profile:', profileError);
+                    const { data: seniorRecord } = await supabase
+                        .from('seniors')
+                        .select('name, email')
+                        .eq('id', firstSeniorId)
+                        .maybeSingle();
 
                     setSenior({
                         id: firstSeniorId,
-                        name: profile?.full_name || 'Senior',
-                        email: profile?.email,
-                        phone: profile?.phone
+                        name: seniorRecord?.name || profile?.full_name || 'Senior',
+                        email: seniorRecord?.email || profile?.email
                     });
                     setNoSeniors(false);
                 } else {

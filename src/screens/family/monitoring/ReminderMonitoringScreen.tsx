@@ -54,7 +54,12 @@ const ReminderMonitoringScreen = () => {
     const navigation = useNavigation();
     const route = useRoute();
 
-    const { senior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+    // Use the standardized hook
+    const { senior: defaultSenior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+
+    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
+    const activeSeniorId = params?.seniorId || defaultSenior?.id;
+    const activeSeniorName = params?.seniorName || defaultSenior?.name;
 
     const [reminders, setReminders] = useState<Reminder[]>([]);
     const [loading, setLoading] = useState(true);
@@ -73,12 +78,12 @@ const ReminderMonitoringScreen = () => {
     });
 
     const fetchReminders = useCallback(async () => {
-        if (!senior) return;
+        if (!activeSeniorId) return;
         try {
             const { data, error } = await supabase
                 .from('reminders')
                 .select('*')
-                .eq('user_id', senior.id)
+                .eq('user_id', activeSeniorId)
                 .order('time', { ascending: true });
 
             if (error) throw error;
@@ -90,13 +95,13 @@ const ReminderMonitoringScreen = () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [senior]);
+    }, [activeSeniorId]);
 
     useEffect(() => {
-        if (senior) {
+        if (activeSeniorId) {
             fetchReminders();
         }
-    }, [senior, fetchReminders]);
+    }, [activeSeniorId, fetchReminders]);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -150,7 +155,7 @@ const ReminderMonitoringScreen = () => {
                         enabled: newReminder.enabled,
                     })
                     .eq('id', editingReminderId)
-                    .eq('user_id', senior?.id)
+                    .eq('user_id', activeSeniorId)
                     .select()
                     .single();
 
@@ -160,11 +165,11 @@ const ReminderMonitoringScreen = () => {
                 }
             } else {
                 // Add new reminder
-                if (!senior) return;
+                if (!activeSeniorId) return;
                 const { data, error } = await supabase
                     .from('reminders')
                     .insert([{
-                        user_id: senior.id,
+                        user_id: activeSeniorId,
                         title: newReminder.title,
                         time: newReminder.time,
                         type: newReminder.type,
@@ -273,7 +278,7 @@ const ReminderMonitoringScreen = () => {
         </View>
     );
 
-    if (seniorLoading || (loading && !refreshing)) {
+    if ((!activeSeniorId && seniorLoading) || (loading && !refreshing)) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <ActivityIndicator size="large" color={colors.primary} />
@@ -281,7 +286,7 @@ const ReminderMonitoringScreen = () => {
         );
     }
 
-    if (noSeniors) {
+    if (!activeSeniorId && noSeniors) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <Ionicons name="people-outline" size={64} color={colors.textSecondary} />
@@ -300,7 +305,7 @@ const ReminderMonitoringScreen = () => {
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>
-                    {senior?.name}'s Reminders
+                    {activeSeniorName}'s Reminders
                 </Text>
                 <TouchableOpacity
                     onPress={handleOpenAddModal}

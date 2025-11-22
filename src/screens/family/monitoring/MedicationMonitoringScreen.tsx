@@ -28,6 +28,7 @@ import {
     addMedication as addMedicationAPI,
     updateMedication as updateMedicationAPI,
 } from '../../../api/medication';
+import { useConnectedSenior } from '../../../hooks/useConnectedSenior';
 
 const frequencies = [
     'Once daily',
@@ -45,7 +46,11 @@ const MedicationMonitoringScreen = () => {
     const { colors, isDark } = useTheme();
     const navigation = useNavigation();
     const route = useRoute();
-    const { seniorId, seniorName } = route.params as { seniorId: string; seniorName: string };
+
+    const { senior: defaultSenior } = useConnectedSenior();
+    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
+    const seniorId = params?.seniorId || defaultSenior?.id || '';
+    const seniorName = params?.seniorName || defaultSenior?.name || 'Senior';
 
     const [medications, setMedications] = useState<Medication[]>([]);
     const [loading, setLoading] = useState(true);

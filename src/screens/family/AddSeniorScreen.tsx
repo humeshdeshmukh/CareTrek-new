@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
-  SafeAreaView, 
-  ScrollView, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../../lib/supabase';
+import uuid from 'react-native-uuid';
 
 type RootStackParamList = {
   HomeTab: { refresh?: boolean };
@@ -60,13 +61,26 @@ const AddSeniorScreen = () => {
   const fetchSeniorProfile = async (id: string): Promise<SeniorProfile> => {
     try {
       console.log('Fetching senior profile for ID:', id);
-      
-      // First try to get from seniors table
-      const { data: seniorData, error: seniorError } = await supabase
-        .from('seniors')
-        .select('*')
-        .eq('id', id)
-        .single();
+
+      // Check if the ID is a valid UUID
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+      let seniorData = null;
+      let seniorError = null;
+
+      if (isUuid) {
+        // First try to get from seniors table
+        const result = await supabase
+          .from('seniors')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        seniorData = result.data;
+        seniorError = result.error;
+      } else {
+        console.log('Input is not a valid UUID, skipping ID lookup');
+      }
 
       console.log('Senior data response:', { seniorData, seniorError });
 
@@ -77,7 +91,7 @@ const AddSeniorScreen = () => {
           hint: seniorError.hint,
           code: seniorError.code
         });
-        
+
         // Try to find the senior by email if the ID doesn't work
         console.log('Trying to find senior by email...');
         const { data: seniorByEmail, error: emailError } = await supabase
@@ -85,9 +99,9 @@ const AddSeniorScreen = () => {
           .select('*')
           .eq('email', id)
           .maybeSingle();
-          
+
         console.log('Senior by email lookup:', { seniorByEmail, emailError });
-        
+
         if (seniorByEmail) {
           console.log('Found senior by email, using ID:', seniorByEmail.id);
           // Use the found senior's ID
@@ -132,7 +146,7 @@ const AddSeniorScreen = () => {
         created_at: senior.created_at || new Date().toISOString(),
         updated_at: senior.updated_at || new Date().toISOString(),
       };
-      
+
       console.log('Returning senior profile:', profile);
       return profile;
     } catch (error) {
@@ -144,7 +158,7 @@ const AddSeniorScreen = () => {
   const connectToSenior = async (profile: SeniorProfile, relationshipName: string) => {
     try {
       console.log('Connecting to senior with profile:', profile, 'and relationship:', relationshipName);
-      
+
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         console.error('Authentication error:', userError);
@@ -152,10 +166,10 @@ const AddSeniorScreen = () => {
       }
 
       const seniorId = profile.user_id || profile.id;
-      
+
       // 1. First, try to find the senior
       let senior = null;
-      
+
       // Try by ID first
       const { data: seniorById, error: findError } = await supabase
         .from('seniors')
@@ -171,7 +185,7 @@ const AddSeniorScreen = () => {
           .select('*')
           .eq('email', profile.email)
           .maybeSingle();
-          
+
         senior = seniorByEmail;
       } else {
         senior = seniorById;
@@ -197,7 +211,7 @@ const AddSeniorScreen = () => {
           console.error('Error creating senior:', createError);
           throw new Error(`Failed to create senior profile: ${createError.message}`);
         }
-        
+
         senior = newSenior;
       }
 
@@ -245,7 +259,7 @@ const AddSeniorScreen = () => {
 
       console.log('Successfully connected to senior:', senior);
       return senior;
-      
+
     } catch (error) {
       console.error('Error in connectToSenior:', error);
       throw error;
@@ -260,7 +274,7 @@ const AddSeniorScreen = () => {
 
     try {
       setIsLoading(true);
-      
+
       // First try to fetch the profile
       let profile;
       try {
@@ -269,22 +283,24 @@ const AddSeniorScreen = () => {
         console.log('Could not find existing senior, creating new one...');
         // If not found, create a minimal profile with the ID/email provided
         const isEmail = seniorId.includes('@');
+        const newId = uuid.v4() as string;
+
         profile = {
-          id: isEmail ? crypto.randomUUID() : seniorId,
-          user_id: isEmail ? crypto.randomUUID() : seniorId,
-          name: `Senior ${seniorId.substring(0, 8)}`,
-          email: isEmail ? seniorId : `${seniorId}@example.com`,
+          id: isEmail ? newId : (uuid.validate(seniorId) ? seniorId : newId),
+          user_id: isEmail ? newId : (uuid.validate(seniorId) ? seniorId : newId),
+          name: isEmail ? `Senior ${seniorId.substring(0, 8)}` : (uuid.validate(seniorId) ? `Senior ${seniorId.substring(0, 8)}` : seniorId),
+          email: isEmail ? seniorId : `${newId}@example.com`,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
       }
-      
+
       // Connect to the senior (will create if doesn't exist)
       const connectedSenior = await connectToSenior(profile, relationship);
-      
+
       // Show success message and navigate back
       Alert.alert(
-        t('Success'), 
+        t('Success'),
         `Successfully connected to ${connectedSenior.name || 'senior'}`,
         [
           {
@@ -302,7 +318,7 @@ const AddSeniorScreen = () => {
           }
         ]
       );
-      
+
     } catch (error: any) {
       console.error('Error in handleSubmit:', error);
       Alert.alert(
@@ -316,20 +332,20 @@ const AddSeniorScreen = () => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#171923' : '#FFFBEF' }]}>
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={styles.keyboardAvoidingView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView 
+        <ScrollView
           contentContainerStyle={styles.scrollViewContent}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
             <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-              <Ionicons 
-                name="arrow-back" 
-                size={24} 
-                color={isDark ? '#E2E8F0' : '#1A202C'} 
+              <Ionicons
+                name="arrow-back"
+                size={24}
+                color={isDark ? '#E2E8F0' : '#1A202C'}
               />
             </TouchableOpacity>
             <Text style={[styles.title, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
@@ -339,21 +355,21 @@ const AddSeniorScreen = () => {
           </View>
 
           <View style={[styles.card, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}>
-            <Ionicons 
-              name="person-circle-outline" 
-              size={80} 
-              color={isDark ? '#718096' : '#A0AEC0'} 
+            <Ionicons
+              name="person-circle-outline"
+              size={80}
+              color={isDark ? '#718096' : '#A0AEC0'}
               style={styles.icon}
             />
-            
+
             <Text style={[styles.instruction, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>
               {t('Enter the Senior\'s ID to connect')}
             </Text>
-            
+
             <TextInput
               style={[
-                styles.input, 
-                { 
+                styles.input,
+                {
                   backgroundColor: isDark ? '#2D3748' : '#F7FAFC',
                   color: isDark ? '#E2E8F0' : '#1A202C',
                   borderColor: isDark ? '#4A5568' : '#E2E8F0'
@@ -368,11 +384,11 @@ const AddSeniorScreen = () => {
               autoComplete="email"
               keyboardType="email-address"
             />
-            
+
             <TextInput
               style={[
-                styles.input, 
-                { 
+                styles.input,
+                {
                   backgroundColor: isDark ? '#2D3748' : '#F7FAFC',
                   color: isDark ? '#E2E8F0' : '#1A202C',
                   borderColor: isDark ? '#4A5568' : '#E2E8F0',
@@ -386,10 +402,10 @@ const AddSeniorScreen = () => {
               autoCapitalize="words"
             />
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[
-                styles.submitButton, 
-                { 
+                styles.submitButton,
+                {
                   backgroundColor: (seniorId && relationship) ? (isDark ? '#48BB78' : '#2F855A') : (isDark ? '#2D3748' : '#E2E8F0'),
                   opacity: (seniorId && relationship) ? 1 : 0.7
                 }

@@ -35,7 +35,11 @@ const LocationMonitoringScreen = () => {
     const route = useRoute();
 
     // Use the standardized hook
-    const { senior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+    const { senior: defaultSenior, loading: seniorLoading, noSeniors } = useConnectedSenior();
+
+    const params = route.params as { seniorId?: string; seniorName?: string } | undefined;
+    const activeSeniorId = params?.seniorId || defaultSenior?.id;
+    const activeSeniorName = params?.seniorName || defaultSenior?.name;
 
     const [loading, setLoading] = useState(true);
     const [homeLocation, setHomeLocation] = useState<any>(null);
@@ -68,11 +72,11 @@ const LocationMonitoringScreen = () => {
 
     // Initial Data & Senior Updates
     useEffect(() => {
-        if (senior) {
+        if (activeSeniorId) {
             fetchData();
 
             // Subscribe to live updates
-            const unsubscribe = seniorLocationService.subscribeToLocationUpdates(senior.id, (newLocation) => {
+            const unsubscribe = seniorLocationService.subscribeToLocationUpdates(activeSeniorId, (newLocation) => {
                 console.log('Received live location update:', newLocation);
                 setLiveLocation(newLocation);
                 if (!searchedLocation && !isNavigating) {
@@ -94,7 +98,7 @@ const LocationMonitoringScreen = () => {
                 unsubscribe();
             };
         }
-    }, [senior, isTracking, searchedLocation, isNavigating]);
+    }, [activeSeniorId, isTracking, searchedLocation, isNavigating]);
 
     // User Location Tracking (Always On) & Initial Center
     useEffect(() => {
@@ -150,13 +154,13 @@ const LocationMonitoringScreen = () => {
     }, []); // Run once on mount
 
     const fetchData = async () => {
-        if (!senior) return;
+        if (!activeSeniorId) return;
 
         try {
             setLoading(true);
             const [homeLoc, latestLoc] = await Promise.all([
-                homeLocationService.getHomeLocation(senior.id),
-                seniorLocationService.getLatestLocation(senior.id)
+                homeLocationService.getHomeLocation(activeSeniorId),
+                seniorLocationService.getLatestLocation(activeSeniorId)
             ]);
 
             setHomeLocation(homeLoc);
@@ -390,7 +394,7 @@ const LocationMonitoringScreen = () => {
     };
 
     const handleSaveLocation = async () => {
-        if (!senior) return;
+        if (!activeSeniorId) return;
 
         if (!editingLocation.address || editingLocation.latitude === 0 || editingLocation.longitude === 0) {
             Alert.alert('Error', 'Please provide a valid address and location');
@@ -400,13 +404,13 @@ const LocationMonitoringScreen = () => {
         try {
             setLoading(true);
             await homeLocationService.saveHomeLocation(
-                senior.id,
+                activeSeniorId,
                 editingLocation.latitude,
                 editingLocation.longitude,
                 editingLocation.address
             );
             setModalVisible(false);
-            const updatedHome = await homeLocationService.getHomeLocation(senior.id);
+            const updatedHome = await homeLocationService.getHomeLocation(activeSeniorId);
             setHomeLocation(updatedHome);
             Alert.alert('Success', 'Home location updated successfully');
         } catch (error) {
@@ -425,7 +429,7 @@ const LocationMonitoringScreen = () => {
     };
 
     const handleTrackSenior = async () => {
-        if (!senior) return;
+        if (!activeSeniorId) return;
 
         // If navigating, stop navigation first
         if (isNavigating) {
@@ -435,7 +439,7 @@ const LocationMonitoringScreen = () => {
         try {
             setIsTracking(true);
             setSearchedLocation(null); // Clear searched location to resume tracking senior
-            const latest = await seniorLocationService.getLatestLocation(senior.id);
+            const latest = await seniorLocationService.getLatestLocation(activeSeniorId);
             if (latest) {
                 setLiveLocation(latest);
                 calculateDistance(latest);
@@ -490,7 +494,7 @@ const LocationMonitoringScreen = () => {
         }
     };
 
-    if (seniorLoading || (loading && !homeLocation && !liveLocation)) {
+    if ((!activeSeniorId && seniorLoading) || (loading && !homeLocation && !liveLocation)) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <ActivityIndicator size="large" color={colors.primary} />
@@ -498,7 +502,7 @@ const LocationMonitoringScreen = () => {
         );
     }
 
-    if (noSeniors) {
+    if (!activeSeniorId && noSeniors) {
         return (
             <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
                 <Ionicons name="people-outline" size={64} color={colors.textSecondary} />
@@ -521,7 +525,7 @@ const LocationMonitoringScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.headerCenter}>
                     <Text style={[styles.headerTitle, { color: colors.text }]}>
-                        {isNavigating ? 'Navigating...' : `${senior?.name}'s Location`}
+                        {isNavigating ? 'Navigating...' : `${activeSeniorName}'s Location`}
                     </Text>
                     {!isNavigating && isLive && (
                         <View style={styles.liveIndicator}>
@@ -743,7 +747,7 @@ const LocationMonitoringScreen = () => {
                                     latitude: liveLocation.latitude,
                                     longitude: liveLocation.longitude,
                                 }}
-                                title={senior?.name}
+                                title={activeSeniorName}
                                 description={`Last updated: ${new Date(liveLocation.timestamp).toLocaleTimeString()}`}
                                 zIndex={2}
                             >

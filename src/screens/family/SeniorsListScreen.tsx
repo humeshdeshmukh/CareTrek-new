@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  FlatList, 
-  TouchableOpacity, 
-  SafeAreaView, 
-  Image, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  SafeAreaView,
+  Image,
   ActivityIndicator,
   RefreshControl,
   Alert
@@ -89,7 +89,7 @@ const SeniorsListScreen = () => {
         // Clear the refresh param to prevent unnecessary refetches
         navigation.setParams({ refresh: false });
       }
-      
+
       return () => {
         // Cleanup if needed
       };
@@ -144,7 +144,7 @@ const SeniorsListScreen = () => {
 
       // Get all senior user IDs
       const seniorUserIds = relationships.map(rel => rel.senior_user_id).filter(Boolean);
-      
+
       if (seniorUserIds.length === 0) {
         console.log('No senior user IDs found');
         setSeniors([]);
@@ -169,40 +169,59 @@ const SeniorsListScreen = () => {
         connectionMap.set(conn.senior_user_id, conn.connection_name);
       });
 
-      // Get basic user profiles (only fields that definitely exist)
+      // 1. Try to fetch from 'seniors' table first (managed seniors)
+      const { data: seniorsData, error: seniorsError } = await supabase
+        .from('seniors')
+        .select('*')
+        .in('id', seniorUserIds);
+
+      if (seniorsError) {
+        console.error('Error fetching seniors data:', seniorsError);
+      }
+
+      // 2. Also fetch from 'user_profiles' for any that might be registered users but not in 'seniors' table
+      // or to get avatar/additional info
       const { data: userProfiles, error: profilesError } = await supabase
         .from('user_profiles')
-        .select('id, full_name, avatar_url')
+        .select('id, full_name, avatar_url, phone_number')
         .in('id', seniorUserIds);
 
       if (profilesError) {
         console.error('Error fetching user profiles:', profilesError);
-        throw profilesError;
       }
 
+      console.log('Fetched seniors data:', seniorsData);
       console.log('Fetched user profiles:', userProfiles);
 
       // Transform the data
       const connectedSeniors = relationships
         .map(rel => {
+          // Try to find in seniors table first
+          const seniorRecord = seniorsData?.find(s => s.id === rel.senior_user_id);
+          // Then try user profiles
           const profile = userProfiles?.find(p => p.id === rel.senior_user_id);
-          
-          // Create a placeholder email using the user ID if needed
-          const email = `${rel.senior_user_id}@caretrek.app`;
-          
-          const connectedAt = rel.created_at 
-            ? new Date(rel.created_at).toLocaleString() 
+
+          // If neither exists, we can't show this senior properly
+          if (!seniorRecord && !profile) return null;
+
+          // Prioritize seniorRecord for name, fall back to profile
+          const name = seniorRecord?.name || profile?.full_name || `Senior ${rel.senior_user_id.substring(0, 6)}`;
+          const email = seniorRecord?.email || `${rel.senior_user_id}@caretrek.app`;
+          const phone = seniorRecord?.phone || profile?.phone_number;
+
+          const connectedAt = rel.created_at
+            ? new Date(rel.created_at).toLocaleString()
             : 'Unknown';
-            
+
           return {
             id: rel.senior_user_id,
-            name: profile?.full_name || `Senior ${rel.senior_user_id.substring(0, 6)}`,
+            name: name,
             status: (rel.status || 'offline') as 'online' | 'offline' | 'alert',
-            lastActive: 'Recently', // You can update this with actual last active time if available
+            lastActive: 'Recently',
             connectedAt: connectedAt,
-            avatar_url: profile?.avatar_url,
+            avatar_url: profile?.avatar_url, // Avatar usually comes from user profile
             email: email,
-            phone: undefined, // Phone not available in the current schema
+            phone: phone,
             relationship: connectionMap.get(rel.senior_user_id) || 'Family Member',
           } as Senior;
         })
@@ -225,7 +244,7 @@ const SeniorsListScreen = () => {
   useFocusEffect(
     React.useCallback(() => {
       fetchConnectedSeniors(!!route.params?.refresh);
-      
+
       // Clear refresh param after handling
       if (route.params?.refresh) {
         navigation.setParams({ refresh: false });
@@ -240,7 +259,7 @@ const SeniorsListScreen = () => {
       [
         {
           text: cancelText,
-          onPress: () => {},
+          onPress: () => { },
           style: 'cancel',
         },
         {
@@ -284,7 +303,7 @@ const SeniorsListScreen = () => {
     };
 
     const config = statusConfig[status] || statusConfig.offline;
-    
+
     return (
       <View style={[styles.statusBadge, { backgroundColor: `${config.color}20` }]}>
         <View style={[styles.statusDot, { backgroundColor: config.color }]} />
@@ -296,13 +315,13 @@ const SeniorsListScreen = () => {
   };
 
   const renderSeniorItem = ({ item }: { item: Senior }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
       style={[styles.seniorCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}
       onPress={() => navigation.navigate('SeniorDetail', { seniorId: item.id })}
     >
       {item.avatar_url ? (
-        <Image 
-          source={{ uri: item.avatar_url }} 
+        <Image
+          source={{ uri: item.avatar_url }}
           style={styles.avatar}
           resizeMode="cover"
         />
@@ -361,24 +380,24 @@ const SeniorsListScreen = () => {
         </View>
       </View>
       <View style={styles.actionButtons}>
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={() => navigation.navigate('SeniorDetail', { seniorId: item.id })}
           style={styles.viewButton}
         >
-          <Ionicons 
-            name="chevron-forward" 
-            size={24} 
-            color={isDark ? '#718096' : '#A0AEC0'} 
+          <Ionicons
+            name="chevron-forward"
+            size={24}
+            color={isDark ? '#718096' : '#A0AEC0'}
           />
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={() => handleDeleteSenior(item)}
           style={styles.deleteButton}
         >
-          <Ionicons 
-            name="trash" 
-            size={20} 
-            color="#E53E3E" 
+          <Ionicons
+            name="trash"
+            size={20}
+            color="#E53E3E"
           />
         </TouchableOpacity>
       </View>
@@ -418,24 +437,24 @@ const SeniorsListScreen = () => {
         />
       ) : (
         <View style={styles.emptyState}>
-          <Ionicons 
-            name="people" 
-            size={64} 
-            color={isDark ? '#4A5568' : '#A0AEC0'} 
+          <Ionicons
+            name="people"
+            size={64}
+            color={isDark ? '#4A5568' : '#A0AEC0'}
           />
           <Text style={[styles.emptyStateText, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>
             {noSeniorsText}
           </Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[styles.addButton, { backgroundColor: isDark ? '#2D3748' : '#E2E8F0' }]}
-            onPress={() => navigation.navigate('AddSenior', { 
-              onSuccess: () => fetchConnectedSeniors(true) 
+            onPress={() => navigation.navigate('AddSenior', {
+              onSuccess: () => fetchConnectedSeniors(true)
             })}
           >
-            <Ionicons 
-              name="person-add" 
-              size={20} 
-              color={isDark ? '#48BB78' : '#2F855A'} 
+            <Ionicons
+              name="person-add"
+              size={20}
+              color={isDark ? '#48BB78' : '#2F855A'}
               style={styles.addButtonIcon}
             />
             <Text style={[styles.addButtonText, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
@@ -446,10 +465,10 @@ const SeniorsListScreen = () => {
       )}
 
       {seniors.length > 0 && (
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.floatingButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]}
-          onPress={() => navigation.navigate('AddSenior', { 
-            onSuccess: () => fetchConnectedSeniors(true) 
+          onPress={() => navigation.navigate('AddSenior', {
+            onSuccess: () => fetchConnectedSeniors(true)
           })}
         >
           <Ionicons name="person-add" size={24} color="white" />
