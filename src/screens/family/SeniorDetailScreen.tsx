@@ -381,7 +381,7 @@ const SeniorDetailScreen: React.FC = () => {
         avatar: profileData?.avatar_url || '', // Avatar usually comes from user profile
         relationship: seniorData?.relationship || 'Senior', // This might need to come from family_connections
         email: seniorData?.email || profileData?.email || '',
-        phone: seniorData?.phone || profileData?.phone_number || 'Phone not set'
+        phone: seniorData?.phone || profileData?.phone || 'Phone not set'
       };
 
       // Fetch relationship from family_connections if needed

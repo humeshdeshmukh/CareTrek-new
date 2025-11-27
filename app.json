@@ -37,7 +37,8 @@
         "READ_MEDIA_VIDEO",
         "READ_MEDIA_AUDIO",
         "MANAGE_EXTERNAL_STORAGE",
-        "CALL_PHONE"
+        "CALL_PHONE",
+        "ACTIVITY_RECOGNITION"
       ],
       "intentFilters": [
         {

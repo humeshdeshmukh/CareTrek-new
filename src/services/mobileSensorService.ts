@@ -8,14 +8,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Try to import Pedometer, but don't fail if not available
-let Pedometer: any = null;
-try {
-  const sensors = require('expo-sensors');
-  Pedometer = sensors.Pedometer;
-} catch (e) {
-  console.warn('[MobileSensor] Pedometer not available, using fallback');
-}
+import { Pedometer } from 'expo-sensors';
 
 interface SensorReading {
   timestamp: Date;
@@ -197,9 +190,8 @@ class MobileSensorService {
    */
   private simulateSteps() {
     // User explicitly requested NO simulated steps
-    // Just log and do nothing
-    console.log('[MobileSensor] Pedometer not available - simulation disabled by user request');
-    return;
+    // But we can log that we are in fallback mode
+    console.log('[MobileSensor] Pedometer not available - unable to track steps');
   }
 
   /**

@@ -98,7 +98,7 @@ export const homeLocationService = {
       return data;
     } catch (error) {
       console.error('Error saving home location:', error);
-      return null;
+      throw error; // Re-throw so calling code can handle it
     }
   },
 

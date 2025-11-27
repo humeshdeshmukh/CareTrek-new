@@ -106,9 +106,9 @@ const HealthScreen = () => {
         const merged = {
           status: watchData?.status || 'disconnected',
           heartRate: watchData?.heartRate !== undefined ? watchData.heartRate : undefined,
-          // REMOVED FALLBACK: Use watch data only, or 0 if undefined
-          steps: watchData?.steps !== undefined ? watchData.steps : 0,
-          calories: watchData?.calories !== undefined ? watchData.calories : 0,
+          // Use watch data if available, otherwise fallback to mobile sensors
+          steps: watchData?.steps !== undefined ? watchData.steps : mobileData?.steps || 0,
+          calories: watchData?.calories !== undefined ? watchData.calories : mobileData?.calories || 0,
           oxygenSaturation: watchData?.oxygenSaturation !== undefined ? watchData.oxygenSaturation : undefined,
           bloodPressure: watchData?.bloodPressure !== undefined ? watchData.bloodPressure : undefined,
           sleepData: watchData?.sleepData !== undefined ? watchData.sleepData : undefined,
