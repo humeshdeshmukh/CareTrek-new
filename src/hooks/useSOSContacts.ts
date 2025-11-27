@@ -22,7 +22,7 @@ export const useSOSContacts = (userId: string | undefined) => {
   // Fetch all contacts
   const fetchContacts = async () => {
     if (!userId) return;
-    
+
     try {
       setLoading(true);
       const { data, error } = await supabase
@@ -44,35 +44,55 @@ export const useSOSContacts = (userId: string | undefined) => {
 
   // Add or update a contact
   const saveContact = async (contact: Omit<SOSContact, 'id' | 'created_at' | 'updated_at'>, id?: string) => {
-    if (!userId) return null;
-    
+    if (!userId) {
+      console.error('Cannot save contact: userId is undefined');
+      throw new Error('User not authenticated');
+    }
+
     try {
       const contactData = { ...contact, user_id: userId };
-      
+      console.log('Attempting to save contact:', contactData);
+
       if (id) {
         // Update existing contact
+        console.log('Updating contact ID:', id);
         const { data, error } = await supabase
           .from('sos_contacts')
           .update(contactData)
           .eq('id', id)
           .select()
           .single();
-          
-        if (error) throw error;
+
+        if (error) {
+          console.error('Supabase update error:', error);
+          throw error;
+        }
+        console.log('Contact updated successfully:', data);
         return data;
       } else {
         // Add new contact
+        console.log('Inserting new contact');
         const { data, error } = await supabase
           .from('sos_contacts')
           .insert([contactData])
           .select()
           .single();
-          
-        if (error) throw error;
+
+        if (error) {
+          console.error('Supabase insert error:', error);
+          throw error;
+        }
+        console.log('Contact inserted successfully:', data);
         return data;
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving contact:', err);
+      console.error('Error details:', {
+        message: err.message,
+        code: err.code,
+        details: err.details,
+        hint: err.hint
+      });
       throw err;
     }
   };
@@ -84,7 +104,7 @@ export const useSOSContacts = (userId: string | undefined) => {
         .from('sos_contacts')
         .delete()
         .eq('id', id);
-        
+
       if (error) throw error;
       return true;
     } catch (err) {
@@ -96,18 +116,18 @@ export const useSOSContacts = (userId: string | undefined) => {
   // Set up real-time subscription
   useEffect(() => {
     if (!userId) return;
-    
+
     fetchContacts();
-    
+
     const subscription = supabase
       .channel('sos_contacts_changes')
-      .on('postgres_changes', 
-        { 
-          event: '*', 
-          schema: 'public', 
+      .on('postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
           table: 'sos_contacts',
           filter: `user_id=eq.${userId}`
-        }, 
+        },
         (payload) => {
           fetchContacts(); // Refresh on any changes
         }

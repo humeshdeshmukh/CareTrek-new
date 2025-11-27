@@ -283,12 +283,14 @@ const AddSeniorScreen = () => {
         console.log('Could not find existing senior, creating new one...');
         // If not found, create a minimal profile with the ID/email provided
         const isEmail = seniorId.includes('@');
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const isValidUuid = uuidRegex.test(seniorId);
         const newId = uuid.v4() as string;
 
         profile = {
-          id: isEmail ? newId : (uuid.validate(seniorId) ? seniorId : newId),
-          user_id: isEmail ? newId : (uuid.validate(seniorId) ? seniorId : newId),
-          name: isEmail ? `Senior ${seniorId.substring(0, 8)}` : (uuid.validate(seniorId) ? `Senior ${seniorId.substring(0, 8)}` : seniorId),
+          id: isEmail ? newId : (isValidUuid ? seniorId : newId),
+          user_id: isEmail ? newId : (isValidUuid ? seniorId : newId),
+          name: isEmail ? `Senior ${seniorId.substring(0, 8)}` : (isValidUuid ? `Senior ${seniorId.substring(0, 8)}` : seniorId),
           email: isEmail ? seniorId : `${newId}@example.com`,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),

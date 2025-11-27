@@ -1,11 +1,11 @@
 // src/screens/senior/SOSContactsScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  FlatList, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
   Alert,
   TextInput,
   Modal,
@@ -44,21 +44,21 @@ const SOSContactsScreen = () => {
   const { isDark } = useTheme();
   const { currentLanguage } = useTranslation();
   const { user } = useAuth();
-  const { 
-    contacts, 
-    loading, 
-    error, 
-    saveContact, 
-    deleteContact, 
-    refreshContacts 
+  const {
+    contacts,
+    loading,
+    error,
+    saveContact,
+    deleteContact,
+    refreshContacts
   } = useSOSContacts(user?.id);
-  
+
   // Log user ID and contacts when they change
   useEffect(() => {
     console.log('User ID:', user?.id);
     console.log('Contacts from hook:', contacts);
   }, [user?.id, contacts]);
-  
+
   // Translations
   const { translatedText: backText } = useCachedTranslation('Back', currentLanguage);
   const { translatedText: sosContactsText } = useCachedTranslation('SOS Contacts', currentLanguage);
@@ -79,7 +79,7 @@ const SOSContactsScreen = () => {
 
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [currentContact, setCurrentContact] = useState<SOSContact | null>(null);
-  
+
   const [formData, setFormData] = useState<{
     name: string;
     phone: string;
@@ -129,30 +129,45 @@ const SOSContactsScreen = () => {
   };
 
   const handleSaveContact = async () => {
+    // Check if user is authenticated
+    if (!user?.id) {
+      Alert.alert(
+        'Authentication Required',
+        'Please sign in to save contacts.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (!formData.name.trim() || !formData.phone.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
 
     try {
-      console.log('Saving contact:', formData);
+      console.log('Saving contact for user:', user.id);
+      console.log('Contact data:', formData);
+
       if (currentContact) {
         // Update existing contact
         console.log('Updating contact with ID:', currentContact.id);
         const updatedContact = await saveContact(formData, currentContact.id);
         console.log('Updated contact:', updatedContact);
+        Alert.alert('Success', 'Contact updated successfully');
       } else {
         // Add new contact
         console.log('Adding new contact');
         const newContact = await saveContact(formData);
         console.log('Added new contact:', newContact);
+        Alert.alert('Success', 'Contact added successfully');
       }
       setIsModalVisible(false);
       // Refresh contacts after saving
       await refreshContacts();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving contact:', error);
-      Alert.alert('Error', 'Failed to save contact. Please try again.');
+      const errorMessage = error?.message || error?.error_description || 'Failed to save contact. Please try again.';
+      Alert.alert('Error', errorMessage);
     }
   };
 
@@ -183,30 +198,79 @@ const SOSContactsScreen = () => {
 
   const handleCall = async (phoneNumber: string) => {
     try {
-      // Remove any non-numeric characters except '+' from the phone number
-      const cleanNumber = phoneNumber.replace(/[^0-9+]/g, '');
-      
-      // Create the phone URL based on the platform
-      const phoneUrl = Platform.OS === 'ios' 
-        ? `telprompt:${cleanNumber}`
-        : `tel:${cleanNumber}`;
-      
-      // Check if the device can open the URL
-      const supported = await Linking.canOpenURL(phoneUrl);
-      
-      if (supported) {
-        await Linking.openURL(phoneUrl);
-      } else {
+      console.log('Attempting to call:', phoneNumber);
+
+      // Remove any whitespace, dashes, parentheses, and keep only digits and +
+      const cleanNumber = phoneNumber.replace(/[\s\-()]/g, '').replace(/[^0-9+]/g, '');
+      console.log('Cleaned number:', cleanNumber);
+
+      if (!cleanNumber || cleanNumber.length < 3) {
         Alert.alert(
-          'Unable to make call',
-          'Your device does not support phone calls or the phone number is invalid.'
+          'Invalid Phone Number',
+          'The phone number appears to be invalid. Please check and update it.'
         );
+        return;
       }
-    } catch (error) {
+
+      // Create the phone URL based on the platform
+      const phoneUrl = `tel:${cleanNumber}`;
+      console.log('Phone URL:', phoneUrl);
+      console.log('Platform:', Platform.OS);
+
+      // On Android, just try to open directly 
+      // canOpenURL often returns false even when tel: works
+      if (Platform.OS === 'android') {
+        console.log('Android: Opening tel URL directly...');
+        try {
+          await Linking.openURL(phoneUrl);
+          console.log('Call initiated successfully on Android');
+        } catch (err: any) {
+          console.error('Android call error:', err);
+          Alert.alert(
+            'Unable to Make Call',
+            'Could not open phone dialer. Make sure you are on a real device with phone capability, not an emulator.\n\nError: ' + (err.message || 'Unknown error')
+          );
+        }
+      } else {
+        // For iOS, try telprompt first (shows confirmation), fallback to tel
+        let iosUrl = `telprompt:${cleanNumber}`;
+        console.log('iOS: Checking URL support for:', iosUrl);
+
+        const supported = await Linking.canOpenURL(iosUrl);
+        console.log('telprompt supported:', supported);
+
+        if (supported) {
+          await Linking.openURL(iosUrl);
+          console.log('Call initiated with telprompt');
+        } else {
+          // Try regular tel
+          const fallbackUrl = `tel:${cleanNumber}`;
+          console.log('iOS: Trying fallback tel URL');
+          const fallbackSupported = await Linking.canOpenURL(fallbackUrl);
+          console.log('tel supported:', fallbackSupported);
+
+          if (fallbackSupported) {
+            await Linking.openURL(fallbackUrl);
+            console.log('Call initiated with tel');
+          } else {
+            Alert.alert(
+              'Unable to Make Call',
+              'Your device does not support phone calls. Make sure you are on a real device, not a simulator.'
+            );
+          }
+        }
+      }
+    } catch (error: any) {
       console.error('Error making phone call:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        platform: Platform.OS
+      });
+
       Alert.alert(
-        'Error',
-        'An error occurred while trying to make the call. Please try again.'
+        'Call Failed',
+        `Unable to initiate call: ${error.message || 'Unknown error'}\n\nNote: Phone calls may not work on simulators/emulators. Please test on a real device.`
       );
     }
   };
@@ -218,14 +282,14 @@ const SOSContactsScreen = () => {
           {item.name}
         </Text>
         <Text style={[styles.contactType, { color: isDark ? '#A0AEC0' : '#4A5568' }]}>
-          {item.type === 'family' ? familyText : 
-           item.type === 'police' ? policeText : 
-           item.type === 'medical' ? medicalText : otherText}
+          {item.type === 'family' ? familyText :
+            item.type === 'police' ? policeText :
+              item.type === 'medical' ? medicalText : otherText}
           {item.is_emergency ? ` • ${emergencyContactText}` : ''}
         </Text>
       </View>
       <View style={styles.contactActions}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: '#38A169' }]}
           onPress={() => handleCall(item.phone)}
           accessibilityLabel={`Call ${item.name}`}
@@ -234,7 +298,7 @@ const SOSContactsScreen = () => {
           <Ionicons name="call" size={16} color="white" />
           <Text style={styles.actionButtonText}>{callText}</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: isDark ? '#4A5568' : '#E2E8F0' }]}
           onPress={() => handleEditContact(item)}
         >
@@ -261,7 +325,7 @@ const SOSContactsScreen = () => {
       <Text style={[styles.sectionTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
         {emergencyContactsText}
       </Text>
-      
+
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={isDark ? '#48BB78' : '#38A169'} />
@@ -292,7 +356,7 @@ const SOSContactsScreen = () => {
       )}
 
       {/* Add Contact Button */}
-      <TouchableOpacity 
+      <TouchableOpacity
         style={[styles.addButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]}
         onPress={handleAddContact}
       >
@@ -312,23 +376,23 @@ const SOSContactsScreen = () => {
             <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
               {currentContact ? 'Edit Contact' : 'Add New Contact'}
             </Text>
-            
+
             <Text style={[styles.label, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{nameText}</Text>
             <TextInput
-              style={[styles.input, { 
+              style={[styles.input, {
                 backgroundColor: isDark ? '#4A5568' : '#EDF2F7',
                 color: isDark ? '#E2E8F0' : '#1A202C',
                 borderColor: isDark ? '#4A5568' : '#E2E8F0'
               }]}
               value={formData.name}
-              onChangeText={text => setFormData({...formData, name: text})}
+              onChangeText={text => setFormData({ ...formData, name: text })}
               placeholder={nameText}
               placeholderTextColor={isDark ? '#A0AEC0' : '#A0AEC0'}
             />
-            
+
             <Text style={[styles.label, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{phoneText}</Text>
             <TextInput
-              style={[styles.input, { 
+              style={[styles.input, {
                 backgroundColor: isDark ? '#4A5568' : '#EDF2F7',
                 color: isDark ? '#E2E8F0' : '#1A202C',
                 borderColor: isDark ? '#4A5568' : '#E2E8F0'
@@ -336,67 +400,67 @@ const SOSContactsScreen = () => {
               placeholder={phoneText}
               placeholderTextColor={isDark ? '#A0AEC0' : '#A0AEC0'}
               value={formData.phone}
-              onChangeText={(text) => setFormData({...formData, phone: text})}
+              onChangeText={(text) => setFormData({ ...formData, phone: text })}
               keyboardType="phone-pad"
               returnKeyType="done"
             />
-            
+
             <Text style={[styles.label, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{typeText}</Text>
-            <View style={[styles.picker, { 
+            <View style={[styles.picker, {
               backgroundColor: isDark ? '#4A5568' : '#EDF2F7',
               borderColor: isDark ? '#4A5568' : '#E2E8F0'
             }]}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
-                  styles.pickerItem, 
+                  styles.pickerItem,
                   formData.type === 'family' && { backgroundColor: isDark ? '#2F855A' : '#38A169' }
                 ]}
-                onPress={() => setFormData({...formData, type: 'family'})}
+                onPress={() => setFormData({ ...formData, type: 'family' })}
               >
                 <Text style={[
-                  styles.pickerItemText, 
+                  styles.pickerItemText,
                   { color: formData.type === 'family' ? 'white' : (isDark ? '#E2E8F0' : '#1A202C') }
                 ]}>
                   {familyText}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
-                  styles.pickerItem, 
+                  styles.pickerItem,
                   formData.type === 'police' && { backgroundColor: isDark ? '#2F855A' : '#38A169' }
                 ]}
-                onPress={() => setFormData({...formData, type: 'police'})}
+                onPress={() => setFormData({ ...formData, type: 'police' })}
               >
                 <Text style={[
-                  styles.pickerItemText, 
+                  styles.pickerItemText,
                   { color: formData.type === 'police' ? 'white' : (isDark ? '#E2E8F0' : '#1A202C') }
                 ]}>
                   {policeText}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
-                  styles.pickerItem, 
+                  styles.pickerItem,
                   formData.type === 'medical' && { backgroundColor: isDark ? '#2F855A' : '#38A169' }
                 ]}
-                onPress={() => setFormData({...formData, type: 'medical'})}
+                onPress={() => setFormData({ ...formData, type: 'medical' })}
               >
                 <Text style={[
-                  styles.pickerItemText, 
+                  styles.pickerItemText,
                   { color: formData.type === 'medical' ? 'white' : (isDark ? '#E2E8F0' : '#1A202C') }
                 ]}>
                   {medicalText}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
-                  styles.pickerItem, 
+                  styles.pickerItem,
                   formData.type === 'other' && { backgroundColor: isDark ? '#2F855A' : '#38A169' }
                 ]}
-                onPress={() => setFormData({...formData, type: 'other'})}
+                onPress={() => setFormData({ ...formData, type: 'other' })}
               >
                 <Text style={[
-                  styles.pickerItemText, 
+                  styles.pickerItemText,
                   { color: formData.type === 'other' ? 'white' : (isDark ? '#E2E8F0' : '#1A202C') }
                 ]}>
                   {otherText}
@@ -410,7 +474,7 @@ const SOSContactsScreen = () => {
               </Text>
               <Switch
                 value={formData.is_emergency}
-                onValueChange={value => setFormData({...formData, is_emergency: value})}
+                onValueChange={value => setFormData({ ...formData, is_emergency: value })}
                 trackColor={{ false: isDark ? '#4A5568' : '#E2E8F0', true: isDark ? '#48BB78' : '#38A169' }}
                 thumbColor="#FFFFFF"
               />
@@ -425,8 +489,8 @@ const SOSContactsScreen = () => {
                   {cancelText}
                 </Text>
               </Pressable>
-              <TouchableOpacity 
-                style={[styles.modalButton, { 
+              <TouchableOpacity
+                style={[styles.modalButton, {
                   backgroundColor: isDark ? '#2F855A' : '#38A169',
                   opacity: loading ? 0.7 : 1
                 }]}

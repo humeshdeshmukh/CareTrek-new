@@ -128,8 +128,8 @@ const SeniorAuthScreen: React.FC = () => {
         if (result?.error) {
           throw new Error(result.error);
         }
-        
-        // The navigation will be handled by the useEffect hook above
+
+        // The navigation will be handled by the useEffect hook in App.tsx
         // when the isAuthenticated state changes in the Redux store
       } else {
         // Call signUp with required arguments
@@ -139,10 +139,48 @@ const SeniorAuthScreen: React.FC = () => {
           name, // name
           'senior' // role
         );
-        if (res && res.error) throw new Error(res.error);
 
-        Alert.alert('Success', 'Account created successfully! Please sign in.');
-        setIsSignIn(true);
+        // Check if the signup response indicates email verification is required
+        // This will be on the 'user' property if signup succeeded
+        if (res && res.user && res.user.requiresConfirmation) {
+          // Email verification required - show message and switch to sign in
+          Alert.alert(
+            'Account Created!',
+            res.user.message || 'Please check your email to verify your account before signing in.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  // Switch to sign-in mode and clear the sensitive fields
+                  setIsSignIn(true);
+                  setPassword('');
+                  setConfirmPassword('');
+                  setName('');
+                }
+              }
+            ]
+          );
+        } else if (res && res.error) {
+          // Actual error occurred
+          throw new Error(res.error.message || res.error);
+        } else if (res && res.user) {
+          // Signup succeeded without email verification requirement
+          Alert.alert(
+            'Success',
+            'Account created successfully! Please sign in.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  setIsSignIn(true);
+                  setPassword('');
+                  setConfirmPassword('');
+                  setName('');
+                }
+              }
+            ]
+          );
+        }
       }
     } catch (error: any) {
       console.error('Auth error:', error);
@@ -174,12 +212,12 @@ const SeniorAuthScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
       >
-        <ScrollView 
+        <ScrollView
           contentContainerStyle={styles.scrollContainer}
           keyboardShouldPersistTaps="handled"
         >
@@ -197,9 +235,9 @@ const SeniorAuthScreen: React.FC = () => {
               {!isSignIn && (
                 <View style={styles.inputBlock}>
                   <Text style={[styles.label, { color: colors.text }]}>Full Name</Text>
-                  <View style={[styles.inputContainer, { 
+                  <View style={[styles.inputContainer, {
                     backgroundColor: colors.card,
-                    borderColor: errors.name ? 'red' : colors.border 
+                    borderColor: errors.name ? 'red' : colors.border
                   }]}>
                     <Icon name="account" size={20} color={colors.primary} style={styles.icon} />
                     <TextInput
@@ -221,9 +259,9 @@ const SeniorAuthScreen: React.FC = () => {
 
               <View style={styles.inputBlock}>
                 <Text style={[styles.label, { color: colors.text }]}>Email</Text>
-                <View style={[styles.inputContainer, { 
+                <View style={[styles.inputContainer, {
                   backgroundColor: colors.card,
-                  borderColor: errors.email ? 'red' : colors.border 
+                  borderColor: errors.email ? 'red' : colors.border
                 }]}>
                   <Icon name="email" size={20} color={colors.primary} style={styles.icon} />
                   <TextInput
@@ -245,9 +283,9 @@ const SeniorAuthScreen: React.FC = () => {
 
               <View style={styles.inputBlock}>
                 <Text style={[styles.label, { color: colors.text }]}>Password</Text>
-                <View style={[styles.inputContainer, { 
+                <View style={[styles.inputContainer, {
                   backgroundColor: colors.card,
-                  borderColor: errors.password ? 'red' : colors.border 
+                  borderColor: errors.password ? 'red' : colors.border
                 }]}>
                   <Icon name="lock" size={20} color={colors.primary} style={styles.icon} />
                   <TextInput
@@ -269,9 +307,9 @@ const SeniorAuthScreen: React.FC = () => {
               {!isSignIn && (
                 <View style={styles.inputBlock}>
                   <Text style={[styles.label, { color: colors.text }]}>Confirm Password</Text>
-                  <View style={[styles.inputContainer, { 
+                  <View style={[styles.inputContainer, {
                     backgroundColor: colors.card,
-                    borderColor: errors.confirmPassword ? 'red' : colors.border 
+                    borderColor: errors.confirmPassword ? 'red' : colors.border
                   }]}>
                     <Icon name="lock-check" size={20} color={colors.primary} style={styles.icon} />
                     <TextInput
@@ -292,9 +330,9 @@ const SeniorAuthScreen: React.FC = () => {
               )}
 
               <TouchableOpacity
-                style={[styles.button, { 
+                style={[styles.button, {
                   backgroundColor: colors.primary,
-                  opacity: (isSubmitDisabled() || loading) ? 0.7 : 1 
+                  opacity: (isSubmitDisabled() || loading) ? 0.7 : 1
                 }]}
                 onPress={handleSubmit}
                 disabled={isSubmitDisabled() || loading}
@@ -315,12 +353,12 @@ const SeniorAuthScreen: React.FC = () => {
               </View>
 
               {/* Google Sign In Button */}
-              <TouchableOpacity 
-                style={[styles.socialButton, { 
+              <TouchableOpacity
+                style={[styles.socialButton, {
                   backgroundColor: colors.card,
                   borderColor: colors.border,
                 }]}
-                onPress={() => {}}
+                onPress={() => { }}
                 disabled={loading}
               >
                 <Icon name="google" size={20} color={colors.text} />
@@ -341,9 +379,9 @@ const SeniorAuthScreen: React.FC = () => {
               </View>
 
               {isSignIn && (
-                <TouchableOpacity 
-                  style={styles.forgotPasswordButton} 
-                  onPress={() => navigation.navigate('ForgotPassword' as any)} 
+                <TouchableOpacity
+                  style={styles.forgotPasswordButton}
+                  onPress={() => navigation.navigate('ForgotPassword' as any)}
                   disabled={loading}
                 >
                   <Text style={{ color: colors.primary, fontWeight: '500' }}>Forgot Password?</Text>

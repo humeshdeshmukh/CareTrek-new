@@ -1,6 +1,6 @@
 // src/store/slices/authSlice.ts
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { signIn, signUp, signOut, checkSession } from './authActions';
 
 export type UserRole = 'family' | 'senior' | null;
 
@@ -19,89 +19,12 @@ interface AuthState {
   isAuthenticated: boolean;
 }
 
-interface Credentials {
-  email: string;
-  password: string;
-  displayName?: string;
-  role: UserRole;
-}
-
 const initialState: AuthState = {
   user: null,
   loading: false,
   error: null,
   isAuthenticated: false,
 };
-
-// Mock user database
-const mockUsers: Record<string, User> = {};
-
-// Mock authentication service
-const authService = {
-  async signUp(email: string, password: string, displayName: string, role: UserRole): Promise<User> {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    if (mockUsers[email]) {
-      throw new Error('User already exists');
-    }
-
-    const user: User = {
-      id: `user_${Date.now()}`,
-      email,
-      displayName,
-      role,
-      token: `token_${Math.random().toString(36).substr(2, 9)}`,
-    };
-
-    mockUsers[email] = user;
-    await AsyncStorage.setItem('@user', JSON.stringify(user));
-    return user;
-  },
-
-  async signIn(email: string, password: string): Promise<User> {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const user = mockUsers[email];
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    await AsyncStorage.setItem('@user', JSON.stringify(user));
-    return user;
-  },
-
-  async signOut(): Promise<void> {
-    await AsyncStorage.removeItem('@user');
-  },
-
-  async getCurrentUser(): Promise<User | null> {
-    const userJson = await AsyncStorage.getItem('@user');
-    return userJson ? JSON.parse(userJson) : null;
-  },
-};
-
-// Async thunks
-export const initializeAuth = createAsyncThunk('auth/initialize', async () => {
-  return await authService.getCurrentUser();
-});
-
-export const signUp = createAsyncThunk(
-  'auth/signUp',
-  async ({ email, password, displayName, role }: Required<Credentials>) => {
-    return await authService.signUp(email, password, displayName, role);
-  }
-);
-
-export const signIn = createAsyncThunk(
-  'auth/signIn',
-  async ({ email, password }: Credentials) => {
-    return await authService.signIn(email, password);
-  }
-);
-
-export const signOut = createAsyncThunk('auth/signOut', async () => {
-  await authService.signOut();
-});
 
 const authSlice = createSlice({
   name: 'auth',
@@ -119,16 +42,16 @@ const authSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    // Initialize Auth
-    builder.addCase(initializeAuth.pending, (state) => {
+    // Check Session
+    builder.addCase(checkSession.pending, (state) => {
       state.loading = true;
     });
-    builder.addCase(initializeAuth.fulfilled, (state, action) => {
+    builder.addCase(checkSession.fulfilled, (state, action) => {
       state.user = action.payload;
       state.isAuthenticated = !!action.payload;
       state.loading = false;
     });
-    builder.addCase(initializeAuth.rejected, (state) => {
+    builder.addCase(checkSession.rejected, (state) => {
       state.loading = false;
       state.isAuthenticated = false;
     });
@@ -139,9 +62,21 @@ const authSlice = createSlice({
       state.error = null;
     });
     builder.addCase(signUp.fulfilled, (state, action) => {
-      state.user = action.payload;
-      state.isAuthenticated = true;
-      state.loading = false;
+      // Check if email confirmation is required
+      // If so, do NOT mark user as authenticated
+      const requiresConfirmation = (action.payload as any)?.requiresConfirmation;
+
+      if (requiresConfirmation) {
+        // Email verification required - don't log the user in
+        state.user = null;
+        state.isAuthenticated = false;
+        state.loading = false;
+      } else {
+        // Normal signup without email verification
+        state.user = action.payload;
+        state.isAuthenticated = true;
+        state.loading = false;
+      }
     });
     builder.addCase(signUp.rejected, (state, action) => {
       state.loading = false;
