@@ -161,12 +161,12 @@ const MedicationScreen = () => {
           ...newMedication,
           user_id: user.id,
         });
-        
+
         if (error) {
           console.error('Update error:', error);
           throw error;
         }
-        
+
         if (data) {
           console.log('Medication updated successfully:', data);
           setMedications(medications.map(med => (med.id === editingMedicationId ? { ...data } : med)));
@@ -181,12 +181,12 @@ const MedicationScreen = () => {
           ...newMedication,
           user_id: user.id,
         });
-        
+
         if (error) {
           console.error('Add error:', error);
           throw error;
         }
-        
+
         if (data) {
           console.log('Medication added successfully:', data);
           setMedications(prev => [...prev, data]);
@@ -203,7 +203,7 @@ const MedicationScreen = () => {
     } catch (error) {
       console.error('Error in handleSaveMedication:', error);
       Alert.alert(
-        'Error', 
+        'Error',
         `Failed to ${isEditing ? 'update' : 'add'} medication. ${error instanceof Error ? error.message : 'Please try again.'}`
       );
     } finally {
@@ -394,8 +394,8 @@ const MedicationScreen = () => {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Custom Header */}
       <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <TouchableOpacity 
-          onPress={() => navigation.goBack()} 
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
           style={styles.backButton}
           activeOpacity={0.7}
         >
@@ -525,11 +525,11 @@ const MedicationScreen = () => {
                         <Text style={{ color: newMedication.time ? colors.text : colors.textSecondary, fontSize: 16 }}>
                           {newMedication.time
                             ? (() => {
-                                const [hours, minutes] = newMedication.time.split(':').map(Number);
-                                const period = hours >= 12 ? 'PM' : 'AM';
-                                const hours12 = hours % 12 || 12;
-                                return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`;
-                              })()
+                              const [hours, minutes] = newMedication.time.split(':').map(Number);
+                              const period = hours >= 12 ? 'PM' : 'AM';
+                              const hours12 = hours % 12 || 12;
+                              return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`;
+                            })()
                             : 'Select time'}
                         </Text>
                         <Ionicons name="chevron-down" size={16} color={colors.textSecondary} style={{ marginLeft: 8 }} />
@@ -541,11 +541,11 @@ const MedicationScreen = () => {
                               value={
                                 newMedication.time
                                   ? (() => {
-                                      const [hours, minutes] = newMedication.time.split(':').map(Number);
-                                      const date = new Date();
-                                      date.setHours(hours, minutes);
-                                      return date;
-                                    })()
+                                    const [hours, minutes] = newMedication.time.split(':').map(Number);
+                                    const date = new Date();
+                                    date.setHours(hours, minutes);
+                                    return date;
+                                  })()
                                   : new Date()
                               }
                               mode="time"
@@ -553,6 +553,11 @@ const MedicationScreen = () => {
                               textColor={colors.text}
                               themeVariant={isDark ? 'dark' : 'light'}
                               onChange={(event, time) => {
+                                // On Android, we must close the picker immediately
+                                if (Platform.OS === 'android') {
+                                  setShowTimePicker(false);
+                                }
+
                                 if (time) {
                                   const hours = time.getHours().toString().padStart(2, '0');
                                   const minutes = time.getMinutes().toString().padStart(2, '0');
@@ -600,7 +605,7 @@ const MedicationScreen = () => {
                         multiline
                         numberOfLines={4}
                         onFocus={onInstructionsFocus}
-                        // allow keyboard to be dismissed by Back button (handled globally)
+                      // allow keyboard to be dismissed by Back button (handled globally)
                       />
                       {/* small clear button inside input (UX) */}
                       {newMedication.instructions ? (
