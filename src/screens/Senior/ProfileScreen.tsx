@@ -11,14 +11,16 @@ import {
   Platform,
   StatusBar,
   SafeAreaView,
-  Dimensions
+  Dimensions,
+  Switch
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { useAuth } from '../../hooks/useAuth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { supabase } from '../../lib/supabase';
 
 type ProfileItem = {
   icon: string;
@@ -30,13 +32,42 @@ type ProfileItem = {
 
 const ProfileScreen: React.FC = () => {
   const { user, signOut } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark, toggleTheme } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [profileData, setProfileData] = useState<any>(null);
 
   const navigation = useNavigation<any>();
-  
+
+  // Fetch profile data
+  const fetchProfile = useCallback(async () => {
+    if (!user?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setProfileData(data);
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    }
+  }, [user?.id]);
+
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchProfile();
+    }, [fetchProfile])
+  );
+
   // Set custom header options
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -56,11 +87,11 @@ const ProfileScreen: React.FC = () => {
     });
   }, [navigation, colors.primary]);
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Replace with real refresh logic if needed
-    setTimeout(() => setRefreshing(false), 1000);
-  }, []);
+    await fetchProfile();
+    setRefreshing(false);
+  }, [fetchProfile]);
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -80,7 +111,7 @@ const ProfileScreen: React.FC = () => {
       [
         {
           text: 'Cancel',
-          onPress: () => {},
+          onPress: () => { },
           style: 'cancel',
         },
         {
@@ -112,26 +143,26 @@ const ProfileScreen: React.FC = () => {
     {
       icon: 'account-circle',
       label: 'Full Name',
-      value: user?.displayName || 'Not set',
+      value: profileData?.display_name || user?.displayName || 'Not set',
       action: () => navigation.navigate('Auth', { screen: 'EditProfile' }),
     },
     {
       icon: 'email-outline',
       label: 'Email Address',
-      value: user?.email || 'Not set',
-      action: () => {},
+      value: profileData?.email || user?.email || 'Not set',
+      action: () => { },
     },
     {
       icon: 'phone-outline',
       label: 'Phone Number',
-      value: (user as any)?.phoneNumber || 'Not provided',
-      action: () => {},
+      value: profileData?.phone || (user as any)?.phoneNumber || 'Not provided',
+      action: () => { },
     },
     {
       icon: 'account-tie',
       label: 'Account Type',
       value: user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Senior',
-      action: () => {},
+      action: () => { },
     },
     {
       icon: 'identifier',
@@ -164,10 +195,10 @@ const ProfileScreen: React.FC = () => {
 
         <View style={styles.userInfo}>
           <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
-            {user?.displayName || 'User'}
+            {profileData?.display_name || user?.displayName || 'User'}
           </Text>
           <Text style={styles.email} numberOfLines={1} ellipsizeMode="tail">
-            {user?.email || ''}
+            {profileData?.email || user?.email || ''}
           </Text>
         </View>
       </View>
@@ -175,51 +206,51 @@ const ProfileScreen: React.FC = () => {
   );
 
   const renderProfileInfo = () => (
-    <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Personal Information</Text>
+    <View style={[styles.card, { backgroundColor: colors.card }]}>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Personal Information</Text>
 
       {profileItems.map((item, index) => (
         <TouchableOpacity
           key={item.label}
-          style={styles.detailItem}
+          style={[styles.detailItem, { borderBottomColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}
           onPress={item.action}
           activeOpacity={0.7}
         >
           <View style={styles.detailContent}>
             <View style={styles.detailLeft}>
-              <View style={styles.iconContainer}>
-                <Icon 
-                  name={item.icon as any} 
-                  size={22} 
-                  color={colors.primary} 
+              <View style={[styles.iconContainer, { backgroundColor: isDark ? 'rgba(74, 144, 226, 0.2)' : 'rgba(74, 144, 226, 0.1)' }]}>
+                <Icon
+                  name={item.icon as any}
+                  size={22}
+                  color={colors.primary}
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>{item.label}</Text>
-                <Text 
-                  style={styles.detailValue} 
-                  numberOfLines={1} 
+                <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>{item.label}</Text>
+                <Text
+                  style={[styles.detailValue, { color: colors.text }]}
+                  numberOfLines={1}
                   ellipsizeMode="tail"
                 >
                   {item.value}
                 </Text>
               </View>
             </View>
-            
+
             {(item.copyable || item.label === 'User ID') && (
               <TouchableOpacity
                 onPress={() => copyToClipboard(item.value)}
                 style={styles.copyButton}
               >
-                <Icon 
-                  name={copied && item.label === 'User ID' ? 'check' : 'content-copy'} 
-                  size={20} 
-                  color={copied && item.label === 'User ID' ? '#4CAF50' : '#666'}
+                <Icon
+                  name={copied && item.label === 'User ID' ? 'check' : 'content-copy'}
+                  size={20}
+                  color={copied && item.label === 'User ID' ? '#4CAF50' : colors.textSecondary}
                 />
               </TouchableOpacity>
             )}
           </View>
-          
+
           {copied && item.label === 'User ID' && (
             <Text style={styles.copiedText}>
               Copied to clipboard!
@@ -231,9 +262,25 @@ const ProfileScreen: React.FC = () => {
   );
 
   const renderActionButtons = () => (
-    <View style={[styles.card, { backgroundColor: '#fff', marginTop: 16 }]}>
+    <View style={[styles.card, { backgroundColor: colors.card, marginTop: 16 }]}>
+      {/* Dark Mode Toggle */}
+      <View style={[styles.actionButton, { borderBottomColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
+        <View style={styles.actionButtonContent}>
+          <View style={[styles.actionIcon, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)' }]}>
+            <Icon name="theme-light-dark" size={22} color={isDark ? '#fff' : '#333'} />
+          </View>
+          <Text style={[styles.actionButtonText, { color: colors.text }]}>Dark Mode</Text>
+        </View>
+        <Switch
+          value={isDark}
+          onValueChange={toggleTheme}
+          trackColor={{ false: '#767577', true: colors.primary }}
+          thumbColor={isDark ? '#fff' : '#f4f3f4'}
+        />
+      </View>
+
       <TouchableOpacity
-        style={styles.actionButton}
+        style={[styles.actionButton, { borderBottomColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}
         onPress={() => navigation.navigate('Language')}
         activeOpacity={0.7}
       >
@@ -241,13 +288,13 @@ const ProfileScreen: React.FC = () => {
           <View style={[styles.actionIcon, { backgroundColor: 'rgba(156, 39, 176, 0.1)' }]}>
             <Icon name="translate" size={22} color="#9C27B0" />
           </View>
-          <Text style={[styles.actionButtonText, { color: '#333' }]}>Language Settings</Text>
+          <Text style={[styles.actionButtonText, { color: colors.text }]}>Language Settings</Text>
         </View>
-        <Icon name="chevron-right" size={22} color="#999" />
+        <Icon name="chevron-right" size={22} color={colors.textSecondary} />
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={styles.actionButton}
+        style={[styles.actionButton, { borderBottomColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}
         onPress={() => navigation.navigate('Auth', { screen: 'EditProfile' })}
         activeOpacity={0.7}
       >
@@ -255,14 +302,14 @@ const ProfileScreen: React.FC = () => {
           <View style={[styles.actionIcon, { backgroundColor: 'rgba(33, 150, 243, 0.1)' }]}>
             <Icon name="account-edit" size={22} color="#2196F3" />
           </View>
-          <Text style={[styles.actionButtonText, { color: '#333' }]}>Edit Profile</Text>
+          <Text style={[styles.actionButtonText, { color: colors.text }]}>Edit Profile</Text>
         </View>
-        <Icon name="chevron-right" size={22} color="#999" />
+        <Icon name="chevron-right" size={22} color={colors.textSecondary} />
       </TouchableOpacity>
 
-      <TouchableOpacity 
+      <TouchableOpacity
         style={[styles.actionButton, { borderBottomWidth: 0 }]}
-        onPress={handleSignOut} 
+        onPress={handleSignOut}
         disabled={isLoading}
         activeOpacity={0.7}
       >
@@ -290,11 +337,11 @@ const ProfileScreen: React.FC = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh} 
-            colors={[colors.primary]} 
-            tintColor={colors.primary} 
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[colors.primary]}
+            tintColor={colors.primary}
           />
         }
       >
@@ -314,7 +361,7 @@ const ProfileScreen: React.FC = () => {
 const { width } = Dimensions.get('window');
 
 const styles = StyleSheet.create({
-  container: { 
+  container: {
     flex: 1,
   },
   scrollContent: {
@@ -333,12 +380,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 12,
   },
-  headerContent: { 
-    alignItems: 'center', 
+  headerContent: {
+    alignItems: 'center',
     paddingHorizontal: 24,
   },
-  avatarContainer: { 
-    position: 'relative', 
+  avatarContainer: {
+    position: 'relative',
     marginBottom: 20,
   },
   avatar: {
@@ -366,131 +413,121 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
   },
-  userInfo: { 
+  userInfo: {
     alignItems: 'center',
     width: '100%',
     paddingHorizontal: 10,
   },
-  name: { 
-    fontSize: 26, 
-    fontWeight: '700', 
+  name: {
+    fontSize: 26,
+    fontWeight: '700',
     marginBottom: 6,
     color: '#fff',
     textAlign: 'center',
     maxWidth: '90%',
   },
-  email: { 
-    fontSize: 16, 
+  email: {
+    fontSize: 16,
     color: 'rgba(255,255,255,0.9)',
     textAlign: 'center',
     maxWidth: '90%',
   },
-  content: { 
-    flex: 1, 
-    padding: 20, 
+  content: {
+    flex: 1,
+    padding: 20,
     paddingTop: 30,
   },
   card: {
     borderRadius: 20,
     padding: 24,
     marginBottom: 16,
-    backgroundColor: '#fff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
     shadowRadius: 12,
     elevation: 3,
   },
-  sectionTitle: { 
-    fontSize: 18, 
-    fontWeight: '700', 
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
     marginBottom: 20,
-    color: '#333',
     letterSpacing: 0.5,
   },
-  detailItem: { 
+  detailItem: {
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
   },
-  detailContent: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
+  detailContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  detailLeft: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
+  detailLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
     marginRight: 10,
   },
-  iconContainer: { 
-    width: 44, 
-    height: 44, 
-    borderRadius: 12, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
+  iconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
     marginRight: 16,
-    backgroundColor: 'rgba(74, 144, 226, 0.1)',
   },
-  detailLabel: { 
-    fontSize: 13, 
+  detailLabel: {
+    fontSize: 13,
     marginBottom: 2,
-    color: '#666',
     fontWeight: '500',
   },
-  detailValue: { 
-    fontSize: 16, 
-    fontWeight: '500', 
+  detailValue: {
+    fontSize: 16,
+    fontWeight: '500',
     maxWidth: '90%',
-    color: '#222',
   },
-  copyButton: { 
-    padding: 8, 
+  copyButton: {
+    padding: 8,
     marginLeft: 8,
     borderRadius: 8,
   },
-  copiedText: { 
-    fontSize: 12, 
-    marginTop: 4, 
+  copiedText: {
+    fontSize: 12,
+    marginTop: 4,
     textAlign: 'right',
     color: '#4CAF50',
     fontWeight: '500',
   },
-  actionButton: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between', 
-    paddingVertical: 16, 
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
     paddingHorizontal: 4,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
   },
-  actionButtonContent: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
+  actionButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
   },
-  actionIcon: { 
-    width: 44, 
-    height: 44, 
-    borderRadius: 12, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
+  actionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
     marginRight: 16,
-    backgroundColor: 'rgba(74, 144, 226, 0.1)',
   },
-  actionButtonText: { 
-    fontSize: 16, 
+  actionButtonText: {
+    fontSize: 16,
     fontWeight: '500',
-    color: '#333',
   },
-  versionText: { 
-    textAlign: 'center', 
-    marginTop: 30, 
-    marginBottom: 20, 
-    fontSize: 12, 
-    color: '#999',
+  versionText: {
+    textAlign: 'center',
+    marginTop: 30,
+    marginBottom: 20,
+    fontSize: 12,
     letterSpacing: 0.3,
   },
 });
