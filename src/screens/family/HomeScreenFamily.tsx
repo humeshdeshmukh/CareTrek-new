@@ -97,14 +97,36 @@ const HomeScreenFamily = () => {
         console.error('Error fetching user profiles:', profilesError);
         throw profilesError;
       }
+      // Get senior details from seniors table (for custom names)
+      const { data: seniorsData, error: seniorsError } = await supabase
+        .from('seniors')
+        .select('id, name')
+        .in('id', seniorUserIds);
+
+      if (seniorsError) {
+        console.error('Error fetching seniors data:', seniorsError);
+      }
+
+      // Get custom names from family_connections
+      const { data: connectionsData, error: connError } = await supabase
+        .from('family_connections')
+        .select('senior_user_id, senior_name')
+        .in('senior_user_id', seniorUserIds)
+        .eq('family_user_id', user.id);
+
+      if (connError) {
+        console.error('Error fetching connections data:', connError);
+      }
 
       // Transform the data
       const seniors = relationships.map(rel => {
         const profile = userProfiles?.find(p => p.id === rel.senior_user_id);
+        const seniorRecord = seniorsData?.find(s => s.id === rel.senior_user_id);
+        const connection = connectionsData?.find(c => c.senior_user_id === rel.senior_user_id);
 
         return {
           id: rel.senior_user_id,
-          name: profile?.full_name || `Senior ${rel.senior_user_id.substring(0, 6)}`,
+          name: connection?.senior_name || seniorRecord?.name || profile?.full_name || 'Senior',
           status: (rel.status as 'online' | 'offline' | 'alert') || 'offline',
           lastActive: rel.created_at
             ? new Date(rel.created_at).toLocaleString()
@@ -159,12 +181,9 @@ const HomeScreenFamily = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollView}
       >
-        {/* Header with Greeting */}
+        {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={[styles.greeting, { color: isDark ? '#E2E8F0' : '#1E293B' }]}>
-              {getGreeting()}
-            </Text>
             <Text style={[styles.title, { color: isDark ? '#E2E8F0' : '#1E293B' }]}>
               {t('CareTrek')}
             </Text>
@@ -455,6 +474,7 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     padding: 16,
+    paddingTop: 40,
   },
   header: {
     flexDirection: 'row',

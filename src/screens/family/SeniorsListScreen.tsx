@@ -154,7 +154,7 @@ const SeniorsListScreen = () => {
       // Get relationship names from family_connections
       const { data: connections, error: connError } = await supabase
         .from('family_connections')
-        .select('senior_user_id, connection_name')
+        .select('senior_user_id, connection_name, senior_name')
         .in('senior_user_id', seniorUserIds)
         .eq('family_user_id', user.id);
 
@@ -163,10 +163,10 @@ const SeniorsListScreen = () => {
         throw connError;
       }
 
-      // Create a map of senior_user_id to connection_name
+      // Create a map of senior_user_id to connection data
       const connectionMap = new Map();
       connections?.forEach(conn => {
-        connectionMap.set(conn.senior_user_id, conn.connection_name);
+        connectionMap.set(conn.senior_user_id, conn);
       });
 
       // 1. Try to fetch from 'seniors' table first (managed seniors)
@@ -204,8 +204,9 @@ const SeniorsListScreen = () => {
           // If neither exists, we can't show this senior properly
           if (!seniorRecord && !profile) return null;
 
-          // Prioritize seniorRecord for name, fall back to profile
-          const name = seniorRecord?.name || profile?.full_name || `Senior ${rel.senior_user_id.substring(0, 6)}`;
+          // Prioritize senior_name from connection, then seniorRecord, then profile
+          const connection = connectionMap.get(rel.senior_user_id);
+          const name = connection?.senior_name || seniorRecord?.name || profile?.full_name || 'Senior';
           const email = seniorRecord?.email || `${rel.senior_user_id}@caretrek.app`;
           const phone = seniorRecord?.phone || profile?.phone_number;
 
@@ -222,7 +223,7 @@ const SeniorsListScreen = () => {
             avatar_url: profile?.avatar_url, // Avatar usually comes from user profile
             email: email,
             phone: phone,
-            relationship: connectionMap.get(rel.senior_user_id) || 'Family Member',
+            relationship: connection?.connection_name || 'Family Member',
           } as Senior;
         })
         .filter(senior => senior !== null); // Filter out any null entries

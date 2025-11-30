@@ -176,7 +176,6 @@ const SeniorDetailScreen: React.FC = () => {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
-  const [editEmail, setEditEmail] = useState('');
   const [editRelationship, setEditRelationship] = useState('');
 
   // Use the senior data context
@@ -243,7 +242,6 @@ const SeniorDetailScreen: React.FC = () => {
     if (!senior) return;
     setEditName(senior.name);
     setEditPhone(senior.phone || '');
-    setEditEmail(senior.email || '');
     setEditRelationship(senior.relationship || '');
     setIsEditingProfile(true);
   };
@@ -258,43 +256,54 @@ const SeniorDetailScreen: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      // 1. Update 'seniors' table
-      const { error: seniorError } = await supabase
-        .from('seniors')
+      // 1. Update 'family_connections' table with the custom name
+      // This is the primary source of truth for the family member's view of the senior
+      const { error: connError } = await supabase
+        .from('family_connections')
         .update({
-          name: editName,
-          phone: editPhone,
-          email: editEmail,
+          senior_name: editName,
+          connection_name: editRelationship,
+          senior_phone: editPhone,
           updated_at: new Date().toISOString()
         })
-        .eq('id', senior.id);
+        .eq('senior_user_id', senior.id)
+        .eq('family_user_id', user?.id);
 
-      if (seniorError) {
-        // If update fails, it might be because the record doesn't exist (e.g. registered user only)
-        // In that case we might need to create it or handle it differently.
-        // For now, let's assume if they are in the list, they have a record or we created one.
-        console.error('Error updating senior record:', seniorError);
+      if (connError) {
+        console.error('Error updating family connection:', connError);
         throw new Error('Failed to update senior details');
       }
 
-      // 2. Update relationship in 'family_connections'
-      if (editRelationship !== senior.relationship) {
-        const { error: connError } = await supabase
-          .from('family_connections')
-          .update({
-            connection_name: editRelationship,
+      // 2. Try to update 'seniors' table as best effort (might fail due to RLS)
+      try {
+        const { error: seniorError } = await supabase
+          .from('seniors')
+          .upsert({
+            id: senior.id,
+            name: editName,
+            phone: editPhone,
+            email: senior.email || `${senior.id}@caretrek.app`,
             updated_at: new Date().toISOString()
-          })
-          .eq('senior_user_id', senior.id)
-          .eq('family_user_id', user?.id);
+          });
 
-        if (connError) {
-          console.error('Error updating relationship:', connError);
+        if (seniorError) {
+          console.log('Best effort update to seniors table failed:', seniorError.message);
         }
+      } catch (e) {
+        console.log('Best effort update to seniors table failed (expected if RLS blocks)', e);
       }
 
-      // Refresh data
-      await fetchSeniorDetails();
+
+
+      // 3. Immediately update local state to reflect changes
+      setSenior(prev => prev ? {
+        ...prev,
+        name: editName,
+        phone: editPhone,
+        relationship: editRelationship
+      } : null);
+
+      // Close modal and show success
       setIsEditingProfile(false);
       Alert.alert('Success', 'Profile updated successfully');
 
@@ -384,17 +393,23 @@ const SeniorDetailScreen: React.FC = () => {
         phone: seniorData?.phone || profileData?.phone || 'Phone not set'
       };
 
-      // Fetch relationship from family_connections if needed
-      if (!seniorProfile.relationship || seniorProfile.relationship === 'Senior') {
-        const { data: connectionData } = await supabase
-          .from('family_connections')
-          .select('connection_name')
-          .eq('senior_user_id', seniorId)
-          .eq('family_user_id', user?.id)
-          .maybeSingle();
+      // Fetch relationship and custom details from family_connections
+      const { data: connectionData } = await supabase
+        .from('family_connections')
+        .select('connection_name, senior_name, senior_phone')
+        .eq('senior_user_id', seniorId)
+        .eq('family_user_id', user?.id)
+        .maybeSingle();
 
-        if (connectionData?.connection_name) {
+      if (connectionData) {
+        if (connectionData.connection_name) {
           seniorProfile.relationship = connectionData.connection_name;
+        }
+        if (connectionData.senior_name) {
+          seniorProfile.name = connectionData.senior_name;
+        }
+        if (connectionData.senior_phone) {
+          seniorProfile.phone = connectionData.senior_phone;
         }
       }
 
@@ -930,23 +945,6 @@ const SeniorDetailScreen: React.FC = () => {
                 />
               </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>Email</Text>
-                <TextInput
-                  style={[styles.input, {
-                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
-                    color: isDark ? '#F8FAFC' : '#1E293B',
-                    borderColor: isDark ? '#334155' : '#E2E8F0'
-                  }]}
-                  value={editEmail}
-                  onChangeText={setEditEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  placeholder="Email Address"
-                  placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
-                />
-              </View>
-
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   style={[styles.modalButton, { backgroundColor: isDark ? '#334155' : '#E2E8F0' }]}
@@ -1094,6 +1092,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   scrollContent: {
+    paddingTop: 40,
     paddingBottom: 24,
   },
   // Header
