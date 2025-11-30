@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView, FlatList, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView, FlatList, Image, Alert, Modal } from 'react-native';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,6 +38,8 @@ const HomeScreenFamily = () => {
   const { t } = useTranslation();
   const [connectedSeniors, setConnectedSeniors] = useState<Senior[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectionModalVisible, setSelectionModalVisible] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const isFocused = useIsFocused();
 
   // Get text color based on theme
@@ -167,6 +169,36 @@ const HomeScreenFamily = () => {
     navigation.navigate(screenName);
   };
 
+  const handleQuickAction = (actionRoute: string) => {
+    if (connectedSeniors.length === 0) {
+      Alert.alert(t('No Connected Seniors'), t('Please add a senior first.'));
+      return;
+    }
+
+    if (connectedSeniors.length === 1) {
+      // Direct navigation if only one senior
+      navigation.navigate(actionRoute, {
+        seniorId: connectedSeniors[0].id,
+        seniorName: connectedSeniors[0].name
+      });
+    } else {
+      // Show selection modal if multiple seniors
+      setPendingAction(actionRoute);
+      setSelectionModalVisible(true);
+    }
+  };
+
+  const onSelectSenior = (senior: Senior) => {
+    setSelectionModalVisible(false);
+    if (pendingAction) {
+      navigation.navigate(pendingAction, {
+        seniorId: senior.id,
+        seniorName: senior.name
+      });
+      setPendingAction(null);
+    }
+  };
+
   // Get current time for greeting
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -242,16 +274,7 @@ const HomeScreenFamily = () => {
             {/* Health */}
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => {
-                if (connectedSeniors.length > 0) {
-                  navigation.navigate('HealthMonitoring', {
-                    seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name
-                  });
-                } else {
-                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
-                }
-              }}
+              onPress={() => handleQuickAction('HealthMonitoring')}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#4F46E5' : '#4F46E5' }]}>
                 <Ionicons name="heart" size={20} color="#FFFFFF" />
@@ -264,16 +287,7 @@ const HomeScreenFamily = () => {
             {/* Medication */}
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => {
-                if (connectedSeniors.length > 0) {
-                  navigation.navigate('MedicationMonitoring', {
-                    seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name
-                  });
-                } else {
-                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
-                }
-              }}
+              onPress={() => handleQuickAction('MedicationMonitoring')}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#10B981' : '#10B981' }]}>
                 <Ionicons name="medkit" size={20} color="#FFFFFF" />
@@ -286,16 +300,7 @@ const HomeScreenFamily = () => {
             {/* Reminders */}
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => {
-                if (connectedSeniors.length > 0) {
-                  navigation.navigate('ReminderMonitoring', {
-                    seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name
-                  });
-                } else {
-                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
-                }
-              }}
+              onPress={() => handleQuickAction('ReminderMonitoring')}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#F59E0B' : '#F59E0B' }]}>
                 <Ionicons name="notifications" size={20} color="#FFFFFF" />
@@ -308,16 +313,7 @@ const HomeScreenFamily = () => {
             {/* Location */}
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => {
-                if (connectedSeniors.length > 0) {
-                  navigation.navigate('LocationMonitoring', {
-                    seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name
-                  });
-                } else {
-                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
-                }
-              }}
+              onPress={() => handleQuickAction('LocationMonitoring')}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#3B82F6' : '#3B82F6' }]}>
                 <Ionicons name="location" size={20} color="#FFFFFF" />
@@ -330,16 +326,7 @@ const HomeScreenFamily = () => {
             {/* Appointments */}
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: isDark ? '#2D3748' : '#F1F5F9' }]}
-              onPress={() => {
-                if (connectedSeniors.length > 0) {
-                  navigation.navigate('AppointmentMonitoring', {
-                    seniorId: connectedSeniors[0].id,
-                    seniorName: connectedSeniors[0].name
-                  });
-                } else {
-                  Alert.alert('No Connected Seniors', 'Please add a senior first.');
-                }
-              }}
+              onPress={() => handleQuickAction('AppointmentMonitoring')}
             >
               <View style={[styles.quickActionIcon, { backgroundColor: isDark ? '#EC4899' : '#EC4899' }]}>
                 <Ionicons name="calendar" size={20} color="#FFFFFF" />
@@ -464,6 +451,58 @@ const HomeScreenFamily = () => {
           </View>
         </View> */}
       </ScrollView>
+
+      {/* Senior Selection Modal */}
+      <Modal
+        visible={selectionModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setSelectionModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectionModalVisible(false)}
+        >
+          <View style={[styles.modalContent, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#1E293B' }]}>
+                {t('Select Senior')}
+              </Text>
+              <TouchableOpacity onPress={() => setSelectionModalVisible(false)}>
+                <Ionicons name="close" size={24} color={isDark ? '#94A3B8' : '#64748B'} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.modalSubtitle, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+              {t('Who do you want to view?')}
+            </Text>
+
+            <ScrollView style={styles.modalList} contentContainerStyle={{ paddingBottom: 20 }}>
+              {connectedSeniors.map((senior) => (
+                <TouchableOpacity
+                  key={senior.id}
+                  style={[styles.modalItem, { borderBottomColor: isDark ? '#334155' : '#F1F5F9' }]}
+                  onPress={() => onSelectSenior(senior)}
+                >
+                  <View style={styles.modalItemLeft}>
+                    {senior.avatar_url ? (
+                      <Image source={{ uri: senior.avatar_url }} style={styles.modalAvatar} />
+                    ) : (
+                      <View style={[styles.modalAvatarPlaceholder, { backgroundColor: isDark ? '#334155' : '#E2E8F0' }]}>
+                        <Ionicons name="person" size={20} color={isDark ? '#94A3B8' : '#64748B'} />
+                      </View>
+                    )}
+                    <Text style={[styles.modalSeniorName, { color: isDark ? '#E2E8F0' : '#1E293B' }]}>
+                      {senior.name}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={isDark ? '#94A3B8' : '#64748B'} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView >
   );
 };
@@ -694,6 +733,63 @@ const styles = StyleSheet.create({
   },
   activityTime: {
     fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    marginBottom: 24,
+  },
+  modalList: {
+    maxHeight: 400,
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  modalItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  modalAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  modalSeniorName: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 
